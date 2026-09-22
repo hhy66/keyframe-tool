@@ -69,7 +69,7 @@
   .toolbar{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px}
   .toolbar .info{flex:1; font-size:13.5px; color:var(--muted); min-width:200px}
   .toolbar .info b{color:var(--text)}
-  #grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(196px,1fr)); gap:12px}
+  #grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px}
   .item{
     position:relative; border:2px solid var(--line); border-radius:12px; overflow:hidden;
     background:#fff; cursor:pointer; transition:.15s;
@@ -77,9 +77,9 @@
   .item:hover{border-color:#a5b4fc; transform:translateY(-1px)}
   .item.off{opacity:.35}
   .item.off img{filter:grayscale(70%)}
-  .item img{display:block; width:100%; aspect-ratio:16/9; object-fit:cover; background:#000; cursor:zoom-in}
+  .item img{display:block; width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; cursor:zoom-in}
   .cap{
-    display:flex; align-items:center; gap:6px; padding:7px 9px; font-size:12.5px;
+    display:flex; align-items:center; gap:6px; padding:7px 6px; font-size:12.5px;
     background:#fff; border-top:1px solid var(--line);
   }
   .cap .idx{color:var(--accent); font-weight:700; font-variant-numeric:tabular-nums}
@@ -93,7 +93,7 @@
   .tag.skip{background:var(--warn)}
   .eye{
     position:absolute; top:6px; left:6px; background:rgba(0,0,0,.55); color:#fff;
-    font-size:11px; border-radius:6px; padding:3px 7px; opacity:0; transition:.15s;
+    font-size:11px; border-radius:6px; padding:3px 7px; opacity:0; transition:.15s; pointer-events:none;
   }
   .item:hover .eye{opacity:1}
   #empty{padding:30px; text-align:center; color:var(--muted); font-size:14px}
@@ -131,6 +131,19 @@
     border-top-color:#fff; border-radius:50%; animation:sp .7s linear infinite; vertical-align:-2px; margin-right:6px}
   @keyframes sp{to{transform:rotate(360deg)}}
   [hidden]{display:none !important}
+  .editorGrid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .previewPane{min-width:0}
+  .previewPane h3{font-size:13px;color:var(--muted);margin:0 0 8px}
+  .previewSurface{background:#111827;border-radius:10px;height:260px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .previewSurface video,.previewSurface img{width:100%;height:100%;object-fit:contain}
+  .editorControls{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .editorControls input[type=number]{width:105px;padding:7px;border:1px solid var(--line);border-radius:6px}
+  #frameSeek{width:100%;margin:12px 0 4px}
+  #previewLabel{font-size:13px;font-variant-numeric:tabular-nums;line-height:1.6}
+  #editorMode{color:var(--accent);font-weight:600}
+  .badge.manual,.badge.adjusted{background:#e0e7ff;color:#3730a3}
+  .editRow{border-top:1px solid var(--line);padding:6px 9px;display:flex;justify-content:flex-end}
+  @media(max-width:700px){.editorGrid{grid-template-columns:1fr}.previewSurface{height:230px}}
 </style>
 </head>
 <body>
@@ -144,9 +157,9 @@
   <!-- 1. 上传 -->
   <section class="card">
     <h2><span class="n">1</span>选择视频文件</h2>
-    <div id="drop">
+    <div id="drop" role="button" tabindex="0" aria-label="选择视频文件">
       <div class="big">点击选择，或将视频拖到这里</div>
-      <div class="sub">支持 mp4 / mov / mkv / avi / webm / flv / ts 等常见格式 · 视频仅在本地处理，不会上传到任何服务器</div>
+      <div class="sub">支持 mp4 / mov / mkv / avi / webm / flv / ts 等常见格式 · 视频仅复制到本机工作目录，不上传云端</div>
       <input type="file" id="file" accept="video/*,.mkv,.avi,.flv,.ts,.wmv,.mpg,.mpeg,.3gp,.ogv" hidden>
     </div>
     <div id="metaBox">
@@ -162,24 +175,60 @@
     <h2><span class="n">2</span>检测参数</h2>
     <div class="row">
       <div class="field">
-        <label>灵敏度：<span id="sensVal">适中</span>
+        <label for="sens">灵敏度：<span id="sensVal">适中 (50)</span>
           <span style="float:right; color:#9aa0b5">左=保守（帧少） · 右=敏感（帧多）</span></label>
         <input type="range" id="sens" min="0" max="100" value="50">
       </div>
       <label class="check">
         <input type="checkbox" id="chkEnds"> 同时保留视频首帧与末帧
       </label>
+      <label class="check"><input type="checkbox" id="chkFlash" checked> 抑制单帧闪光</label>
+      <div><label for="minScene">最小镜头间隔（秒）</label>
+        <input type="number" id="minScene" min="0" max="10" step="0.05" value="0.1" style="width:90px;padding:6px">
+      </div>
       <button class="btn ghost small" id="btnAgain">重新分析</button>
     </div>
-    <div class="hint">调整灵敏度后会自动重新分析。画面基本静止的录屏请调低；剪辑密集的片花请调高。</div>
+    <div class="hint">参数修改后自动分析，已完成的扫描会复用。密集剪辑可减小最小间隔；需要单帧镜头时关闭闪光抑制。</div>
   </section>
 
   <!-- 3. 进度 -->
   <section class="card" id="cardProgress" hidden>
     <h2><span class="n">3</span>分析中…</h2>
     <div class="barWrap"><div class="barFill" id="bar"></div></div>
-    <div id="stage">准备中…</div>
-    <div class="hint">视频较长时第一遍扫描需要解码全部画面，请耐心等待；期间可调灵敏度随时重新开始。</div>
+    <div id="stage" role="status" aria-live="polite">准备中…</div>
+    <button class="btn ghost small" id="btnCancel" hidden>取消分析</button>
+    <button class="btn ghost small" id="btnRetry" hidden>重试连接</button>
+    <div class="hint">首次分析需要逐帧解码，请耐心等待。重新分析期间，已有结果仍可预览和下载。</div>
+  </section>
+
+  <section class="card" id="cardEditor" hidden>
+    <h2>视频预览与手动选帧</h2>
+    <div class="editorGrid">
+      <div class="previewPane">
+        <h3>播放视频，定位需要的画面</h3>
+        <div class="previewSurface"><video id="videoPlayer" controls preload="metadata" playsinline></video></div>
+        <div class="hint" id="videoHint">暂停或拖动播放进度后，右侧显示对应的精确帧。</div>
+        <div class="editorControls">
+          <label for="seekTime">定位到（秒）</label><input id="seekTime" type="number" min="0" step="0.001" value="0">
+          <button class="btn ghost small" id="btnSeekTime">定位画面</button>
+        </div>
+      </div>
+      <div class="previewPane">
+        <h3 id="editorMode">补入新的关键帧</h3>
+        <div class="previewSurface"><img id="exactFrame" alt="将要导出的精确帧" hidden></div>
+        <label for="frameSeek" class="hint">逐帧时间轴</label>
+        <input id="frameSeek" type="range" min="0" max="0" step="1" value="0" aria-label="逐帧时间轴">
+        <div id="previewLabel" role="status" aria-live="polite">分析完成后可定位和补帧。</div>
+        <div class="editorControls">
+          <button class="btn ghost small" id="btnPrevFrame">前一帧</button>
+          <button class="btn ghost small" id="btnNextFrame">后一帧</button>
+          <button class="btn small" id="btnAddFrame">补入结果</button>
+          <button class="btn small" id="btnSaveFrame" hidden>保存微调</button>
+          <button class="btn ghost small" id="btnCancelEdit" hidden>退出微调</button>
+        </div>
+        <div class="hint">以右侧图片与帧号为准。手动修改在重新分析时保留；重复帧不会再次添加。</div>
+      </div>
+    </div>
   </section>
 
   <!-- 4. 结果 -->
@@ -192,15 +241,17 @@
       <button class="btn" id="btnDownload">⬇ 下载所选关键帧 (zip)</button>
     </div>
     <div class="hint left">
-      💡 <b>单击卡片</b>=保留 / 跳过（跳过的不会打包）· <b>单击缩略图</b>=查看原分辨率大图并可单张下载。
-      页面里的网格只是压缩预览，<b>zip 打包的均为视频原始分辨率原图</b>（JPEG 质量 95）。
+      💡 <b>勾选或单击卡片</b>=保留 / 跳过（跳过的不会打包）· <b>单击缩略图</b>=查看原分辨率大图并可单张下载。
+      页面里的网格只是压缩预览，<b>zip 打包的均为视频原始分辨率 JPEG 图片</b>（JPEG 质量 95）。
     </div>
+    <div class="hint left" id="exportLimit"></div>
+    <div class="hint left" id="resultNote"></div>
     <div id="grid"></div>
-    <div id="empty" hidden>没有检测到镜头切换，试试把灵敏度调高，或换用画面变化更明显的视频。</div>
+    <div id="empty" hidden>没有检测到镜头切换，可调高灵敏度，或在上方预览区手动补帧。</div>
   </section>
 </main>
 
-<footer>检测算法：画面灰度差分 + 突变峰值精扫 · 下载为原始分辨率 JPEG · 数据只存在于本机</footer>
+<footer>检测算法：画面逐帧颜色差分 + 闪光抑制 · 下载为原始分辨率 JPEG · 数据只存在于本机</footer>
 
 <!-- 下载进度弹层 -->
 <div class="modal" id="dl" hidden>
@@ -224,295 +275,6 @@
 </div>
 
 <div id="toast"></div>
-<script>
-const $ = s => document.querySelector(s);
-const state = {
-  sid: null, busy: false, pollTimer: null, sens: 50, ends: false,
-  cuts: [], thumbs: [], frames: [], sel: new Set(), dlBusy: false,
-};
-const kindName = { cut: '镜头切换', head: '首帧', tail: '末帧' };
-const sensName = v => v < 33 ? '保守' : v > 66 ? '敏感' : '适中';
-
-/* ---------- 小工具 ---------- */
-function toast(msg, err) {
-  const t = $('#toast');
-  t.textContent = msg;
-  t.className = 'show' + (err ? ' err' : '');
-  clearTimeout(t._h);
-  t._h = setTimeout(() => t.className = '', 3200);
-}
-function fmtDur(s) {
-  if (!s && s !== 0) return '?';
-  s = Math.round(s);
-  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
-  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
-}
-
-/* ---------- 上传 ---------- */
-async function upload(file) {
-  if (state.busy) return;
-  if (!file) return;
-  const okExt = /\.(mp4|mov|avi|mkv|webm|m4v|ts|flv|wmv|mpg|mpeg|3gp|ogv)$/i;
-  if (!okExt.test(file.name)) { toast('不支持的文件格式', true); return; }
-  state.busy = true;
-  $('#btnAgain').disabled = true;
-  toast('上传中…');
-  try {
-    const fd = new FormData();
-    fd.append('file', file);
-    const r = await fetch('/api/upload', { method: 'POST', body: fd });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.detail || '上传失败');
-    state.sid = j.session_id;
-    sessionStorage.setItem('kf_sid', state.sid);
-    $('#cardResult').hidden = true;
-    $('#cardParams').hidden = false;
-    $('#metaBox').style.display = 'block';
-    $('#mName').textContent = j.video_name;
-    $('#mSize').textContent = (j.meta.size_mb || 0) + ' MB';
-    $('#mRes').textContent = j.meta.width + '×' + j.meta.height;
-    $('#mDur').textContent = fmtDur(j.meta.duration);
-    analyze();
-  } catch (e) {
-    toast(e.message || '上传失败', true);
-  } finally {
-    state.busy = false;
-  }
-}
-
-/* ---------- 分析 ---------- */
-async function analyze() {
-  if (!state.sid) return;
-  stopPoll();
-  $('#cardResult').hidden = true;
-  $('#cardProgress').hidden = false;
-  try {
-    const r = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: state.sid, sensitivity: state.sens, include_ends: state.ends }),
-    });
-    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail || '启动失败'); }
-    $('#btnAgain').disabled = true;
-    startPoll();
-  } catch (e) {
-    toast(e.message || '分析启动失败', true);
-    $('#cardProgress').hidden = true;
-  }
-}
-
-function startPoll() {
-  stopPoll();
-  state.pollTimer = setInterval(poll, 650);
-  poll();
-}
-function stopPoll() { if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; } }
-
-async function poll() {
-  if (!state.sid) return;
-  let j;
-  try {
-    const r = await fetch('/api/status/' + state.sid);
-    if (!r.ok) throw new Error('status');
-    j = await r.json();
-  } catch (e) {
-    if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
-    return;
-  }
-  if (j.status === 'running') {
-    $('#bar').style.width = Math.max(1, j.pct) + '%';
-    $('#stage').textContent = j.stage || '';
-  } else if (j.status === 'error') {
-    stopPoll();
-    $('#cardProgress').hidden = true;
-    $('#btnAgain').disabled = false;
-    toast('分析失败：' + (j.error || '未知错误'), true);
-  } else if (j.status === 'done') {
-    stopPoll();
-    $('#cardProgress').hidden = true;
-    render(j.result);
-  }
-}
-
-/* ---------- 结果渲染 ---------- */
-function render(res) {
-  state.cuts = res.cuts || [];
-  state.thumbs = res.thumbs || [];
-  state.frames = res.frames || [];
-  state.sel = new Set(state.cuts.map((_, i) => i));
-  const m = res.meta || {};
-  if (m.duration) $('#mDur').textContent = fmtDur(m.duration) + '  (' + m.frames + ' 帧)';
-  $('#cardResult').hidden = false;
-  $('#btnAgain').disabled = false;
-  const grid = $('#grid');
-  grid.innerHTML = '';
-  if (!state.cuts.length) {
-    $('#empty').hidden = false;
-    updateToolbar();
-    return;
-  }
-  $('#empty').hidden = true;
-  state.cuts.forEach((c, i) => {
-    const item = document.createElement('div');
-    item.className = 'item';
-    const img = document.createElement('img');
-    img.loading = 'lazy';
-    img.src = state.thumbs[i];
-    img.alt = c.label;
-    const eye = document.createElement('span');
-    eye.className = 'eye';
-    eye.textContent = '🔍 原图';
-    const cap = document.createElement('div');
-    cap.className = 'cap';
-    const idx = document.createElement('span');
-    idx.className = 'idx';
-    idx.textContent = '#' + String(i + 1).padStart(3, '0');
-    const tm = document.createElement('span');
-    tm.className = 'time';
-    tm.textContent = c.label;
-    const bd = document.createElement('span');
-    bd.className = 'badge ' + (c.kind === 'cut' ? 'cut' : c.kind === 'head' ? 'head' : 'tail');
-    bd.textContent = kindName[c.kind] || c.kind;
-    cap.append(idx, tm, bd);
-    const tag = document.createElement('span');
-    tag.className = 'tag';
-    tag.hidden = true;
-    item.append(img, eye, tag, cap);
-    img.addEventListener('click', ev => { ev.stopPropagation(); openLb(i); });
-    item.addEventListener('click', () => {
-      if (state.sel.has(i)) { state.sel.delete(i); item.classList.add('off'); tag.textContent = '已跳过'; tag.hidden = false; }
-      else { state.sel.add(i); item.classList.remove('off'); tag.hidden = true; }
-      updateToolbar();
-    });
-    grid.appendChild(item);
-  });
-  updateToolbar();
-}
-
-function updateToolbar() {
-  $('#cntAll').textContent = state.cuts.length;
-  $('#cntSel').textContent = state.sel.size;
-  $('#btnDownload').disabled = state.sel.size === 0;
-}
-
-/* ---------- 原图灯箱 ---------- */
-function openLb(i) {
-  if (!state.frames || !state.frames[i]) return;
-  $('#lbImg').src = state.frames[i];
-  const c = state.cuts[i];
-  $('#lbCap').textContent = '#' + String(i + 1).padStart(3, '0') + '  ' + c.label +
-    '  ·  ' + (kindName[c.kind] || c.kind) + '  ·  原始分辨率';
-  $('#lbDl').href = state.frames[i].replace('/api/frame/', '/api/frame-dl/');
-  $('#lbDl').download = '';
-  $('#lb').hidden = false;
-}
-function closeLb() {
-  $('#lb').hidden = true;
-  $('#lbImg').src = '';
-}
-$('#lbClose').addEventListener('click', closeLb);
-$('#lb').addEventListener('click', ev => { if (ev.target.id === 'lb') closeLb(); });
-document.addEventListener('keydown', ev => { if (ev.key === 'Escape') { closeLb(); $('#dl').hidden = true; } });
-
-/* ---------- 打包下载（带进度） ---------- */
-async function download() {
-  if (!state.sid || state.sel.size === 0 || state.dlBusy) return;
-  state.dlBusy = true;
-  const btn = $('#btnDownload');
-  btn.disabled = true;
-  $('#dl').hidden = false;
-  $('#dlBar').style.width = '3%';
-  $('#dlInfo').textContent = '正在生成 zip…';
-  try {
-    const ids = [...state.sel].join(',');
-    const r = await fetch('/api/export/' + state.sid + '?ids=' + encodeURIComponent(ids));
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}));
-      throw new Error(j.detail || '导出失败');
-    }
-    const total = parseInt(r.headers.get('Content-Length') || '0', 10);
-    const reader = r.body.getReader();
-    const chunks = [];
-    let got = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      got += value.length;
-      if (total > 0) {
-        const p = Math.min(99, Math.round(got / total * 100));
-        $('#dlBar').style.width = p + '%';
-        $('#dlInfo').textContent = '下载中 ' + (got / 1048576).toFixed(1) +
-          ' / ' + (total / 1048576).toFixed(1) + ' MB';
-      }
-    }
-    $('#dlBar').style.width = '100%';
-    $('#dlInfo').textContent = '打包完成，正在保存文件…';
-    const blob = new Blob(chunks, { type: 'application/zip' });
-    let fn = 'keyframes.zip';
-    const m = (r.headers.get('Content-Disposition') || '').match(/filename\*=UTF-8''([^;]+)/i);
-    if (m) { try { fn = decodeURIComponent(m[1]); } catch (e) { /* 保留默认名 */ } }
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = fn;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    toast('已保存：' + fn + '（' + state.sel.size + ' 张原图）');
-  } catch (e) {
-    toast((e && e.message) || '下载失败', true);
-  } finally {
-    state.dlBusy = false;
-    $('#dl').hidden = true;
-    btn.disabled = state.sel.size === 0;
-  }
-}
-
-/* ---------- 事件绑定 ---------- */
-const drop = $('#drop'), fileInput = $('#file');
-drop.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => { if (fileInput.files[0]) upload(fileInput.files[0]); fileInput.value = ''; });
-['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
-['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
-drop.addEventListener('drop', e => {
-  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) upload(f);
-});
-
-const sensInput = $('#sens');
-let sensTimer = null;
-sensInput.addEventListener('input', () => {
-  state.sens = +sensInput.value;
-  $('#sensVal').textContent = sensName(state.sens);
-  clearTimeout(sensTimer);
-  sensTimer = setTimeout(analyze, 500);
-});
-$('#chkEnds').addEventListener('change', () => { state.ends = $('#chkEnds').checked; analyze(); });
-$('#btnAgain').addEventListener('click', () => analyze());
-$('#btnAll').addEventListener('click', () => {
-  state.sel = new Set(state.cuts.map((_, i) => i));
-  document.querySelectorAll('#grid .item').forEach(el => { el.classList.remove('off'); el.querySelector('.tag').hidden = true; });
-  updateToolbar();
-});
-$('#btnNone').addEventListener('click', () => {
-  state.sel.clear();
-  document.querySelectorAll('#grid .item').forEach(el => { el.classList.add('off'); const t = el.querySelector('.tag'); t.textContent = '已跳过'; t.hidden = false; });
-  updateToolbar();
-});
-$('#btnDownload').addEventListener('click', download);
-
-/* 刷新页面后恢复上次会话 */
-(function restore() {
-  const sid = sessionStorage.getItem('kf_sid');
-  if (!sid) return;
-  state.sid = sid;
-  fetch('/api/status/' + sid).then(r => r.ok ? r.json() : null).then(j => {
-    if (!j) return;
-    if (j.status === 'done' && j.result) { render(j.result); }
-    else if (j.status === 'running') { startPoll(); }
-  }).catch(() => {});
-})();
-</script>
+<script src="/app.js"></script>
 </body>
 </html>
