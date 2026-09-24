@@ -26,6 +26,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 import uvicorn
+import workspace_store
+import storage_manager
+from functools import wraps
+from runtime_compat import lifespan
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -48,11 +52,24 @@ ALLOWED_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v",
 SCAN_WIDTH = 160          # 检测小图最长边；横竖屏均有界
 MAX_EXPORT = 500          # 单次打包上限
 
-app = FastAPI(title="视频关键帧截取工具")
+app = FastAPI(title="视频关键帧截取工具", lifespan=lifespan)
 
-_lock = threading.Lock()
+_lock = threading.RLock()
 _sessions: dict[str, dict] = {}   # session_id -> {video_path, video_name, meta, cache}
 _jobs: dict[str, dict] = {}       # session_id -> job
+
+
+def _storage_guard(fn):
+    @wraps(fn)
+    def guarded(*args, **kwargs):
+        with _lock:
+            _storage.recover()
+            return fn(*args, **kwargs)
+    return guarded
+
+
+def _file_response(sid, path, **kwargs):
+    return _storage.lease(sid, FileResponse(path, **kwargs))
 
 
 class _Cancelled(Exception):
@@ -300,7 +317,7 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
         job["stage"] = "完成"
         fps_r = cache["fps"]
         result = {
-            "run": run,
+            "run": run, "created_at": storage_manager.now(), "action": "analysis",
             "video_name": ses["video_name"],
             "params": {"sensitivity": job["sensitivity"],
                        "include_ends": bool(job.get("include_ends")),
@@ -322,6 +339,9 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
         with _lock:
             if job.get("cancel") or _jobs.get(sid) is not job:
                 raise _Cancelled()
+            staged = {**ses, "excluded": list(ses.get("excluded", []))}
+            _persist_session(sid, staged, result)
+            ses.update({key: staged[key] for key in ("cache_file", "latest_run", "updated_at", "excluded")})
             ses.setdefault("results", {})[run] = result
             job["result"] = result
             job["pct"] = 100.0
@@ -342,11 +362,89 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
 
 # ---------------------------------------------------------------- HTTP API
 
+def _persist_session(sid, ses, result=None):
+    workspace_store.save(WORK, sid, ses, result)
+
+
+def _safe_path(sid, *parts):
+    try:
+        return workspace_store.safe_path(WORK, sid, *parts)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 def _session(sid):
     ses = _sessions.get(sid)
-    if ses is None:
-        raise HTTPException(404, "会话不存在或已过期，请重新上传视频")
-    return ses
+    if ses is not None:
+        return ses
+    try:
+        restored = workspace_store.load(WORK, sid)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    restored["worker_lock"] = threading.Lock()
+    result = restored["results"].get(restored.get("latest_run"))
+    params = result["params"] if result else dict(workspace_store.DEFAULT_PARAMS)
+    with _lock:
+        if sid not in _sessions:
+            _sessions[sid] = restored
+            _jobs[sid] = dict(status="done" if result else "idle", pct=100.0 if result else 0.0,
+                              stage="已恢复", error=None, result=result, run=result["run"] if result else "",
+                              cancel=False, **params)
+        return _sessions[sid]
+
+
+@app.get("/api/workspace")
+@_storage_guard
+def workspace():
+    entries = []
+    for directory in WORK.iterdir():
+        if directory.name == storage_manager.MANAGEMENT or not directory.is_dir():
+            continue
+        sid = directory.name
+        try:
+            ses = workspace_store.load(WORK, sid, load_cache=False)
+            result = ses["results"].get(ses.get("latest_run"))
+            entries.append(dict(session_id=sid, video_name=ses["video_name"], updated_at=ses["updated_at"],
+                                frame_count=len(result["cuts"]) if result else 0, legacy=ses["legacy"],
+                                can_restore=True, note=ses.get("workspace_note", "")))
+        except (ValueError, OSError) as exc:
+            entries.append(dict(session_id=sid, video_name=sid, updated_at="", frame_count=0,
+                                legacy=False, can_restore=False, note=str(exc)))
+    entries.sort(key=lambda entry:entry["updated_at"] or "", reverse=True)
+    return {"entries": entries, "path": str(WORK)}
+
+
+@app.post("/api/workspace/{sid}/restore")
+@_storage_guard
+def restore_workspace(sid: str):
+    _session(sid)
+    return status(sid)
+
+
+@app.put("/api/workspace/{sid}/selection")
+@_storage_guard
+def save_selection(sid: str, payload: dict):
+    ses = _session(sid)
+    excluded = payload.get("excluded")
+    if not isinstance(excluded, list) or any(isinstance(i, bool) or not isinstance(i, (int, str)) for i in excluded):
+        raise HTTPException(400, "选择记录格式无效")
+    with _lock:
+        result = (_jobs.get(sid) or {}).get("result")
+        if not result or payload.get("run") != result["run"]:
+            raise HTTPException(409, "结果已更新，请刷新后再保存选择")
+        allowed = {c["frame_index"] if c["frame_index"] is not None else f"legacy:{result['run']}:{c.get('file_index', i)}"
+                   for i,c in enumerate(result["cuts"])}
+        if any(i not in allowed for i in excluded):
+            raise HTTPException(400, "选择记录包含不存在的关键帧")
+        staged = {**ses, "excluded": list(dict.fromkeys(excluded))}
+        try:
+            _persist_session(sid, staged, result)
+        except Exception as exc:
+            raise HTTPException(500, "保存选择失败，已保留之前记录") from exc
+        ses.update({key:staged[key] for key in ("excluded", "cache_file", "latest_run", "updated_at")})
+    return {"ok": True, "excluded": ses["excluded"]}
 
 
 def _preview_ready(sid, ses):
@@ -363,11 +461,16 @@ def _integer(value):
 
 
 @app.get("/api/video/{sid}")
+@_storage_guard
 def video(sid: str):
-    return FileResponse(_session(sid)["video_path"])
+    path = _session(sid)["video_path"]
+    if path is None or not Path(path).is_file():
+        raise HTTPException(404, "原视频不存在，仅可查看已有截图")
+    return _file_response(sid, path)
 
 
 @app.get("/api/preview/{sid}")
+@_storage_guard
 def preview(sid: str, frame_index: int | None = None, time: float | None = None):
     ses = _session(sid)
     if not ses["worker_lock"].acquire(blocking=False):
@@ -396,6 +499,7 @@ def preview(sid: str, frame_index: int | None = None, time: float | None = None)
 
 
 @app.get("/api/preview-image/{sid}/{frame_index}")
+@_storage_guard
 def preview_image(sid: str, frame_index: int):
     ses = _session(sid)
     if not ses["worker_lock"].acquire(blocking=False):
@@ -420,6 +524,7 @@ def preview_image(sid: str, frame_index: int):
 
 
 @app.post("/api/edit/{sid}")
+@_storage_guard
 def edit(sid: str, payload: dict):
     ses = _session(sid)
     if not ses["worker_lock"].acquire(blocking=False):
@@ -490,14 +595,16 @@ def edit(sid: str, payload: dict):
                 for name, directory in (("frames", fdir), ("thumbs", tdir)):
                     shutil.copyfile(WORK / sid / name / result["run"] / f"{old_index}.jpg",
                                     directory / f"{i}.jpg")
-        updated = {**result, "run": run, "cuts": cuts,
+        updated = {**result, "run": run, "cuts": cuts, "created_at": storage_manager.now(), "action": "manual", "pinned": False,
                    "thumbs": [f"/api/thumb/{sid}/{run}/{i}" for i in range(len(cuts))],
                    "frames": [f"/api/frame/{sid}/{run}/{i}" for i in range(len(cuts))]}
         with _lock:
             if _jobs.get(sid) is not job or job.get("result") is not result or job["status"] == "running":
                 raise HTTPException(409, "分析任务或结果已更新，请重试编辑")
-            ses["manual_additions"] = additions
-            ses["manual_adjustments"] = adjustments
+            excluded = [target if value == source else value for value in ses.get("excluded", [])]
+            staged = {**ses, "manual_additions": additions, "manual_adjustments": adjustments, "excluded": excluded}
+            _persist_session(sid, staged, updated)
+            ses.update({key:staged[key] for key in ("manual_additions", "manual_adjustments", "excluded", "cache_file", "latest_run", "updated_at")})
             ses.setdefault("results", {})[run] = updated
             job.update(result=updated, run=run, status="done", pct=100.0, stage="完成", error=None)
             published = True
@@ -521,36 +628,49 @@ async def upload(file: UploadFile = File(...)):
         raise HTTPException(400, f"不支持的文件类型「{ext}」。支持："
                                  + " ".join(sorted(ALLOWED_EXT)))
     sid = uuid.uuid4().hex[:10]
-    sdir = WORK / sid
-    sdir.mkdir(parents=True, exist_ok=True)
-    dest = sdir / ("video" + ext)
-    size = 0
-    try:
-        with open(dest, "wb") as f:
-            while chunk := await file.read(1 << 20):
-                f.write(chunk)
-                size += len(chunk)
-    except Exception:
-        shutil.rmtree(sdir, ignore_errors=True)
-        raise HTTPException(400, "视频接收失败，请重试")
-    meta = probe(dest)
-    if meta is None:
-        shutil.rmtree(sdir, ignore_errors=True)
-        raise HTTPException(400, "无法解析该视频：文件可能损坏，或编码不受支持")
-    meta["size_mb"] = round(size / 1e6, 1)
     with _lock:
-        _sessions[sid] = {"video_path": dest, "video_name": name,
-                          "meta": meta, "cache": {}, "worker_lock": threading.Lock(),
-                          "results": {}}
-    return {"session_id": sid, "video_name": name, "meta": meta}
+        _storage.active[sid] = _storage.active.get(sid, 0) + 1
+    try:
+        sdir = WORK / sid
+        sdir.mkdir(parents=True, exist_ok=True)
+        dest = sdir / ("video" + ext)
+        size = 0
+        try:
+            with open(dest, "wb") as f:
+                while chunk := await file.read(1 << 20):
+                    f.write(chunk)
+                    size += len(chunk)
+        except Exception:
+            shutil.rmtree(sdir, ignore_errors=True)
+            raise HTTPException(400, "视频接收失败，请重试")
+        meta = probe(dest)
+        if meta is None:
+            shutil.rmtree(sdir, ignore_errors=True)
+            raise HTTPException(400, "无法解析该视频：文件可能损坏，或编码不受支持")
+        meta["size_mb"] = round(size / 1e6, 1)
+        ses = {"video_path": dest, "video_name": name, "meta": meta, "cache": {},
+               "worker_lock": threading.Lock(), "results": {}}
+        try:
+            _persist_session(sid, ses)
+        except Exception as exc:
+            raise HTTPException(500, "工作区记录保存失败，请检查磁盘空间") from exc
+        with _lock:
+            _sessions[sid] = ses
+        return {"session_id": sid, "video_name": name, "meta": meta}
+    finally:
+        with _lock:
+            _storage.active[sid] = max(0, _storage.active.get(sid, 0) - 1)
 
 
 @app.post("/api/analyze")
+@_storage_guard
 def analyze(payload: dict):
     sid = str(payload.get("session_id", ""))
-    ses = _sessions.get(sid)
-    if ses is None:
-        raise HTTPException(404, "会话不存在或已过期，请重新上传视频")
+    ses = _session(sid)
+    if ses.get("video_path") is None:
+        raise HTTPException(409, "原视频缺失，无法重新分析")
+    if not ses.get("meta"):
+        ses["meta"] = probe(ses["video_path"]) or {}
     try:
         sens = float(payload.get("sensitivity", 50))
         minimum = float(payload.get("min_scene_seconds", 0.1))
@@ -578,6 +698,7 @@ def analyze(payload: dict):
 
 
 @app.post("/api/cancel/{sid}")
+@_storage_guard
 def cancel(sid: str, payload: dict):
     with _lock:
         job = _jobs.get(sid)
@@ -592,60 +713,73 @@ def cancel(sid: str, payload: dict):
 
 
 @app.get("/api/status/{sid}")
+@_storage_guard
 def status(sid: str):
+    ses = _session(sid)
     job = _jobs.get(sid)
     if job is None:
-        raise HTTPException(404, "没有进行中的任务")
+        return dict(status="idle", run="", video_name=ses["video_name"], meta=ses["meta"],
+                    params=dict(workspace_store.DEFAULT_PARAMS), max_export=MAX_EXPORT,
+                    excluded=ses.get("excluded", []), pct=0.0, stage="等待分析", error=None, result=None)
+    result = job["result"]
+    if result is not None:
+        result = {**result, "meta": {**result["meta"], "can_edit": bool(ses.get("cache", {}).get("frames"))
+                                   and ses.get("video_path") is not None and not result["meta"].get("gallery_only", False)}}
     return {
         "run": job["run"],
         "video_name": _sessions[sid]["video_name"],
         "meta": _sessions[sid]["meta"],
         "params": {key: job[key] for key in ("sensitivity", "include_ends", "min_scene_seconds", "suppress_flash")},
         "max_export": MAX_EXPORT,
+        "excluded": ses.get("excluded", []),
+        "workspace_note": ses.get("workspace_note", ""),
         "status": job["status"],
         "pct": round(job["pct"], 1),
         "stage": job["stage"],
         "error": job["error"],
-        "result": job["result"],
+        "result": result,
     }
 
 
 @app.get("/api/thumb/{sid}/{run}/{i}")
+@_storage_guard
 def thumb(sid: str, run: str, i: int):
-    path = WORK / sid / "thumbs" / run / f"{i}.jpg"
+    path = _safe_path(sid, "thumbs", run, f"{i}.jpg")
     if not path.exists():
         raise HTTPException(404, "预览图不存在")
-    return FileResponse(path, media_type="image/jpeg")
+    return _file_response(sid, path, media_type="image/jpeg")
 
 
 @app.get("/api/frame/{sid}/{run}/{i}")
+@_storage_guard
 def frame(sid: str, run: str, i: int):
     """原分辨率原图（页面内查看用，inline）。"""
-    path = WORK / sid / "frames" / run / f"{i}.jpg"
+    path = _safe_path(sid, "frames", run, f"{i}.jpg")
     if not path.exists():
         raise HTTPException(404, "原图不存在")
-    return FileResponse(path, media_type="image/jpeg")
+    return _file_response(sid, path, media_type="image/jpeg")
 
 
 @app.get("/api/frame-dl/{sid}/{run}/{i}")
+@_storage_guard
 def frame_dl(sid: str, run: str, i: int):
     """单张原图下载（attachment）。"""
-    path = WORK / sid / "frames" / run / f"{i}.jpg"
+    path = _safe_path(sid, "frames", run, f"{i}.jpg")
     if not path.exists():
         raise HTTPException(404, "原图不存在")
-    result = _sessions.get(sid, {}).get("results", {}).get(run)
+    result = _session(sid).get("results", {}).get(run)
     name = "frame.jpg"
-    if result and 0 <= i < len(result["cuts"]):
-        c = result["cuts"][i]
-        name = f"{i + 1:03d}_{c['label'].replace(':', '-')}.jpg"
-    return FileResponse(path, media_type="image/jpeg",
+    if result:
+        c = next((c for n, c in enumerate(result["cuts"]) if c.get("file_index", n) == i), None)
+        if c:
+            label = "unknown" if c["frame_index"] is None else c["label"].replace(":", "-")
+            name = f"{i + 1:03d}_{label}.jpg"
+    return _file_response(sid, path, media_type="image/jpeg",
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 def _export_archive(sid: str, ids: str = "", run: str = ""):
-    ses = _sessions.get(sid)
-    if ses is None:
-        raise HTTPException(404, "会话不存在或已过期，请重新上传视频")
+    ses = _session(sid)
     job = _jobs.get(sid)
     result = ses.get("results", {}).get(run) if run else (job or {}).get("result")
     if not result:
@@ -664,10 +798,11 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
         wanted = list(range(len(cuts)))
     if len(wanted) > MAX_EXPORT:
         raise HTTPException(400, f"一次最多导出 {MAX_EXPORT} 张，请先减少选择")
-    fdir = WORK / sid / "frames" / result["run"]
-    if any(not (fdir / f"{i}.jpg").is_file() for i in wanted):
+    fdir = _safe_path(sid, "frames", result["run"])
+    paths = {i: _safe_path(sid, "frames", result["run"], f"{cuts[i].get('file_index', i)}.jpg") for i in wanted}
+    if any(not paths[i].is_file() for i in wanted):
         raise HTTPException(409, "选中的原图文件缺失，请重新分析；未导出不完整的结果")
-    export_dir = WORK / sid / "exports"
+    export_dir = _safe_path(sid, "exports")
     export_dir.mkdir(exist_ok=True)
     fd, name = tempfile.mkstemp(suffix=".zip", dir=export_dir)
     os.close(fd)
@@ -676,9 +811,11 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
     try:
         with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
             for i in wanted:
-                stem = f"{i + 1:03d}_{cuts[i]['label'].replace(':', '-')}"
-                archive.write(fdir / f"{i}.jpg", f"{stem}.jpg")
-                lines.append(f"{stem}.jpg\t{cuts[i]['label']}\t{cuts[i]['kind']}\t{cuts[i]['frame_index']}")
+                label = "unknown" if cuts[i]["frame_index"] is None else cuts[i]["label"].replace(":", "-")
+                stem = f"{i + 1:03d}_{label}"
+                archive.write(paths[i], f"{stem}.jpg")
+                index = cuts[i]["frame_index"] if cuts[i]["frame_index"] is not None else "unknown"
+                lines.append(f"{stem}.jpg\t{cuts[i]['label']}\t{cuts[i]['kind']}\t{index}")
             archive.writestr("cuts.txt", "\n".join(lines))
     except Exception:
         path.unlink(missing_ok=True)
@@ -688,30 +825,36 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
 
 def _zip_response(sid, path):
     stem = re_safe(Path(_sessions[sid]["video_name"]).stem or "video")
-    return FileResponse(path, media_type="application/zip", filename=f"关键帧_{stem}.zip",
+    return _file_response(sid, path, media_type="application/zip", filename=f"关键帧_{stem}.zip",
                         background=BackgroundTask(path.unlink, missing_ok=True))
 
 
 @app.get("/api/export/{sid}")
+@_storage_guard
 def export(sid: str, ids: str = "", run: str = ""):
     path, _ = _export_archive(sid, ids, run)
     return _zip_response(sid, path)
 
 
 @app.post("/api/export/{sid}")
+@_storage_guard
 def prepare_export(sid: str, payload: dict):
     # 先返回可检查的 JSON，随后由浏览器原生下载，避免在 JS 中构造整个 ZIP Blob。
     path, count = _export_archive(sid, str(payload.get("ids", "")), str(payload.get("run", "")))
+    _storage.prepared[(sid, path.name)] = __import__("time").monotonic() + 60
     return {"url": f"/api/download/{sid}/{path.name}", "count": count}
 
 
 @app.get("/api/download/{sid}/{name}")
+@_storage_guard
 def download_archive(sid: str, name: str):
-    if sid not in _sessions or Path(name).name != name or not name.endswith(".zip") or "\\" in name:
+    _session(sid)
+    if Path(name).name != name or not name.endswith(".zip") or "\\" in name:
         raise HTTPException(404, "下载不存在")
-    path = WORK / sid / "exports" / name
+    path = _safe_path(sid, "exports", name)
     if not path.is_file():
         raise HTTPException(404, "下载已完成或文件不存在，请重新打包")
+    _storage.prepared.pop((sid, name), None)
     return _zip_response(sid, path)
 
 
@@ -725,6 +868,8 @@ def re_sub(name: str) -> str:
 
 
 # ---------------------------------------------------------------- 静态页面
+
+_storage = storage_manager.install(sys.modules[__name__])
 
 app.mount("/", StaticFiles(directory=str(STATIC), html=True), name="static")
 

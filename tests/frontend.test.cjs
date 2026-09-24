@@ -127,6 +127,7 @@ test('manual move preserves excluded selection at the new frame',async()=>{
   let submitted;
   const moved={...result,run:'r2',cuts:[result.cuts[0],{...result.cuts[1],kind:'adjusted',frame_index:31,time:31/30}]};
   const app=boot({saved:{kf_skipped_s1:'[30]'},fetchImpl:async(url,options)=>{
+    if (url.includes('/selection')) return {ok:true,json:async()=>({ok:true})};
     submitted=JSON.parse(options.body);
     return {ok:true,json:async()=>({result:moved,from_frame:30,to_frame:31})};
   }});
@@ -164,4 +165,24 @@ test('no automatic cuts still initializes a precise frame for manual addition',a
   assert.equal(app.run('state.previewFrame'),0);
   assert.equal(app.$('#btnAddFrame').disabled,false);
   assert.equal(app.$('#exactFrame').hidden,false);
+});
+
+test('workspace restore works without an old browser session',async()=>{
+  const app=boot({response:{...done,excluded:[30]}});
+  await app.run("restoreWorkspace('saved-session')");
+  assert.equal(app.run('state.sid'),'saved-session');
+  assert.equal(app.run('state.sel.size'),1);
+  assert.equal(app.$('#mName').textContent,'example.avi');
+  assert.equal(app.$('#cardResult').hidden,false);
+});
+
+test('archived screenshots can be individually selected without invented frame numbers',()=>{
+  const app=boot();
+  app.context.archived={...result,meta:{...result.meta,gallery_only:true},cuts:[
+    {kind:'archived',frame_index:null,file_index:0,label:'时间未知'},
+    {kind:'archived',frame_index:null,file_index:7,label:'时间未知'}]};
+  app.run("state.sid='archive';render(archived);state.sel.delete(0);rememberSelection();render(archived);");
+  assert.equal(app.run('state.sel.has(0)'),false);
+  assert.equal(app.run('state.sel.has(1)'),true);
+  assert.equal(app.$('#cardEditor').hidden,true);
 });

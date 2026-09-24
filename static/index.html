@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>视频 Cut 关键帧截取工具</title>
+<link rel="stylesheet" href="/storage.css">
+<link rel="stylesheet" href="/collage.css">
 <style>
   :root{
     --accent:#4f46e5; --accent2:#7c3aed; --bg:#f3f4fb; --card:#ffffff;
@@ -154,6 +156,15 @@
 </header>
 
 <main>
+  <section class="card" id="cardWorkspace">
+    <div class="toolbar">
+      <div class="info"><b>本地工作区</b> · 找回之前生成的关键帧</div>
+      <button class="btn ghost small" id="btnWorkspace">读取本地工作区</button>
+      <button class="btn ghost small" id="btnStorage">空间管理与清理</button>
+    </div>
+    <div class="hint left" id="workspaceInfo">误关网页或重启工具后，可从工作目录恢复。关闭工具窗口后，需要先重新启动工具。</div>
+    <div id="workspaceList" hidden></div>
+  </section>
   <!-- 1. 上传 -->
   <section class="card">
     <h2><span class="n">1</span>选择视频文件</h2>
@@ -238,6 +249,7 @@
       <div class="info">共 <b id="cntAll">0</b> 张 · 选中 <b id="cntSel">0</b> 张</div>
       <button class="btn ghost small" id="btnAll">全选</button>
       <button class="btn ghost small" id="btnNone">全不选</button>
+      <button class="btn ghost small" id="btnCollage">制作参考拼图</button>
       <button class="btn" id="btnDownload">⬇ 下载所选关键帧 (zip)</button>
     </div>
     <div class="hint left">
@@ -275,6 +287,86 @@
 </div>
 
 <div id="toast"></div>
+<div id="storageManager" class="storageOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="storageTitle">
+  <div class="storagePage">
+    <header class="storageHeader">
+      <div><h2 id="storageTitle">空间管理与清理</h2><p>先看清占用与影响，再决定保留、移入回收区或永久删除。</p></div>
+      <button class="btn ghost" id="storageClose">关闭空间管理</button>
+    </header>
+    <div class="storageBody">
+      <div class="storagePath"><label for="storagePath">仅管理此工作目录</label><input id="storagePath" readonly><button class="btn ghost small" id="storageCopyPath">复制路径</button></div>
+      <div id="storageSummary" class="storageSummary"></div>
+      <p class="storageNotice">移入回收区仍占用磁盘空间；永久删除后才能释放。工作目录以外的原始视频、已下载文件不受影响。</p>
+      <div id="storageOutcome" class="storageOutcome" hidden role="status" aria-live="polite"></div>
+      <div class="storageTools">
+        <button class="btn small" id="storageRecordsTab">工作记录</button>
+        <button class="btn ghost small" id="storageTrashTab">回收区</button>
+        <button class="btn ghost small" id="storageRefresh">刷新占用</button>
+        <input id="storageSearch" type="search" placeholder="搜索视频名称或记录编号" aria-label="搜索工作记录">
+        <select id="storageSort" aria-label="工作记录排序"><option value="size">占用从大到小</option><option value="recent">最近保存优先</option><option value="name">名称排序</option></select>
+      </div>
+      <p id="storageStatus" role="status" aria-live="polite"></p>
+      <div id="storageRecords"></div>
+      <div id="storageTrash" hidden></div>
+    </div>
+  </div>
+</div>
+<div class="modal cleanupModal" id="cleanupConfirm" hidden role="dialog" aria-modal="true" aria-labelledby="cleanupTitle">
+  <div class="cleanupBox">
+    <h2 id="cleanupTitle">确认清理内容</h2>
+    <p id="cleanupName"></p>
+    <div id="cleanupItems"></div>
+    <div class="cleanupColumns"><div><h3>将保留</h3><ul id="cleanupRetained"></ul></div><div><h3>操作后会怎样</h3><ul id="cleanupConsequences"></ul></div></div>
+    <fieldset id="cleanupMode"><legend>处理方式</legend>
+      <label><input id="cleanupTrashMode" type="radio" name="cleanupMode" value="trash" checked> 移入回收区，可尝试恢复，暂不释放空间</label>
+      <label><input id="cleanupPermanentMode" type="radio" name="cleanupMode" value="permanent"> 永久删除，释放空间，无法通过工具撤销</label>
+    </fieldset>
+    <p id="cleanupImpact" class="storageNotice"></p>
+    <div id="cleanupPhraseWrap" hidden><label for="cleanupPhrase" id="cleanupPhraseLabel"></label><input id="cleanupPhrase" autocomplete="off"></div>
+    <p id="cleanupError" role="alert"></p>
+    <div class="editorControls"><button class="btn ghost" id="cleanupCancel">取消</button><button class="btn" id="cleanupExecute">移入回收区</button></div>
+  </div>
+</div>
 <script src="/app.js"></script>
+<script src="/storage.js"></script>
+<div id="collagePanel" class="collageOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="collageTitle">
+  <div class="collageEditor">
+    <div class="collageHeader"><div><h2 id="collageTitle">制作参考拼图</h2><p id="collageSource"></p></div><button class="btn ghost" id="collageClose">关闭拼图</button></div>
+    <div class="collageBody">
+      <aside class="collageSidebar">
+        <h3>1. 选择参考图</h3><p class="hint">这里的选择独立，不改变关键帧下载勾选。草稿保留在当前页面，刷新后需重新选择。</p>
+        <div class="editorControls"><button class="btn ghost small" id="collageSelectAll">全部加入</button><button class="btn ghost small" id="collageClear">清空拼图选图</button><button class="btn ghost small" id="collageImportSelection">带入下载勾选</button></div>
+        <div id="collagePicker" class="collagePicker"></div>
+        <h3>2. 调整顺序</h3><p class="hint">拖动图片排序，也可用上移／下移按钮。拼图从左到右、从上到下排列。</p>
+        <div id="collageOrder" class="collageOrder"></div>
+      </aside>
+      <div class="collageMain">
+        <h3>3. 布局与输出</h3>
+        <div class="collageOptions">
+          <label>布局<select id="collageGrid"><option value="2">2 × 2（4 格）</option><option value="3">3 × 3（9 格）</option></select></label>
+          <label>排版方式<select id="collageShape"><option value="source">原图比例 · 无缝拼接</option><option value="landscape">留白排版 · 横向 16:9</option><option value="square">留白排版 · 正方形 1:1</option><option value="portrait">留白排版 · 竖向 9:16</option></select></label>
+          <label>画面填充<select id="collageFit"><option value="contain">完整显示（保留整张画面）</option><option value="cover">裁剪铺满（居中裁剪）</option></select></label>
+          <label>整图宽度<select id="collageWidth"><option value="1500">1500 像素</option><option value="2400" selected>2400 像素</option><option value="3000">3000 像素</option></select></label>
+          <label>底色<select id="collageBackground"><option value="white">白色</option><option value="dark">深灰</option></select></label>
+          <label>下载格式<select id="collageFormat"><option value="png">PNG</option><option value="jpeg">JPEG（质量 95%）</option></select></label>
+        </div>
+        <p id="collageModeNote" class="hint">无缝拼接自动跟随原图比例，不添加外边距、间距或标注栏。</p>
+        <div class="collageChecks">
+          <label><input type="checkbox" id="collageIndex"> 显示原截图序号</label>
+          <label><input type="checkbox" id="collageTime"> 显示时间码</label>
+          <label><input type="checkbox" id="collageSplit"> 超出格数时分成多张拼图</label>
+        </div>
+        <p id="collageSummary" class="collageNotice" role="status" aria-live="polite"></p>
+        <div class="editorControls"><button class="btn ghost small" id="collagePrev">上一张拼图</button><span id="collagePage"></span><button class="btn ghost small" id="collageNext">下一张拼图</button></div>
+        <p id="collageDimensions" class="hint"></p>
+        <div id="collagePreview" class="collagePreview">选择图片后，点击“生成预览”。</div>
+        <p id="collageStatus" role="status" aria-live="polite"></p>
+        <div class="editorControls"><button class="btn" id="collageRender">生成预览</button><a class="btn ghost" id="collageDownload" role="button" aria-disabled="true">下载当前拼图</a></div>
+        <p class="hint">使用原分辨率截图合成。空格保留底色、不重复填图；裁剪铺满可能截去边缘内容。多张拼图可逐张预览下载。</p>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/collage.js"></script>
 </body>
 </html>

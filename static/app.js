@@ -9,7 +9,7 @@ const state = {
   editIndex: null, editorBase: null,
   ignorePause: false, previewLoading: false,
 };
-const kindName = {cut: '镜头切换', head: '首帧', tail: '末帧', manual: '手动补帧', adjusted: '已微调'};
+const kindName = {cut: '镜头切换', head: '首帧', tail: '末帧', manual: '手动补帧', adjusted: '已微调', archived: '旧截图'};
 const sensName = v => v < 33 ? '保守' : v > 66 ? '敏感' : '适中';
 let sensTimer = null;
 
@@ -36,13 +36,30 @@ function skippedFrames() {
   const values = readStorage('kf_skipped_' + state.sid, []);
   return new Set(Array.isArray(values) ? values : []);
 }
+function frameKey(cut, index) {
+  return cut.frame_index ?? `legacy:${state.resultRun}:${cut.file_index ?? index}`;
+}
+function persistSelection() {
+  if (!state.sid || !state.resultRun) return Promise.resolve();
+  const sid = state.sid, run = state.resultRun, skipped = skippedFrames();
+  const excluded = state.cuts.map(frameKey).filter(key => skipped.has(key));
+  const previous = state.selectionChain || Promise.resolve();
+  state.selectionChain = previous.then(() => jsonRequest('/api/workspace/' + sid + '/selection', {
+    method:'PUT', headers:{'Content-Type':'application/json'}, keepalive:true,
+    body:JSON.stringify({run, excluded}),
+  })).catch(() => {
+    if (sid === state.sid) toast('选择状态暂未保存到工作区，请确认工具连接后重新勾选。',true);
+  });
+  return state.selectionChain;
+}
 function rememberSelection() {
   const skipped = skippedFrames();
   state.cuts.forEach((c, i) => {
-    if (state.sel.has(i)) skipped.delete(c.frame_index);
-    else skipped.add(c.frame_index);
+    if (state.sel.has(i)) skipped.delete(frameKey(c,i));
+    else skipped.add(frameKey(c,i));
   });
   saveStorage('kf_skipped_' + state.sid, [...skipped]);
+  persistSelection();
 }
 async function jsonRequest(url, options = {}, timeout = 15000) {
   const controller = new AbortController();
@@ -63,8 +80,8 @@ function syncInfo(info, params = true) {
   $('#metaBox').style.display = 'block';
   $('#mName').textContent = info.video_name || '';
   const m = info.meta || {};
-  $('#mSize').textContent = (m.size_mb || 0) + ' MB';
-  $('#mRes').textContent = m.width + '×' + m.height;
+  $('#mSize').textContent = typeof m.size_mb === 'number' ? m.size_mb + ' MB' : '大小未知';
+  $('#mRes').textContent = m.width && m.height ? m.width + '×' + m.height : '分辨率未知';
   $('#mDur').textContent = fmtDur(m.duration) + (m.frames ? ` (${m.frames} 帧)` : '');
   if (params && info.params) {
     state.sens = info.params.sensitivity;
@@ -182,6 +199,7 @@ async function poll(token, restoreParams, failures) {
     state.run = j.run;
     state.maxExport = j.max_export || 500;
     state.jobRunning = j.status === 'running';
+    if (restoreParams && Array.isArray(j.excluded)) saveStorage('kf_skipped_' + sid,j.excluded);
     syncInfo(j, restoreParams);
     $('#btnRetry').hidden = true;
     if (j.result && (restoreParams || state.resultRun !== j.result.run)) render(j.result, false);
@@ -206,7 +224,7 @@ async function poll(token, restoreParams, failures) {
     $('#btnCancel').hidden = true;
     $('#btnAgain').disabled = false;
     if (e.status === 404) {
-      $('#stage').textContent = '会话已失效，请重新选择视频。';
+      $('#stage').textContent = '未找到当前会话，可点击上方“读取本地工作区”恢复记录。';
       $('#btnRetry').hidden = true;
       $('#cardResult').hidden = true;
       state.sid = null; state.resultRun = null;
@@ -229,9 +247,9 @@ function render(res, restoreParams = true) {
   state.resultRun = res.run;
   state.cuts = res.cuts || []; state.thumbs = res.thumbs || []; state.frames = res.frames || [];
   const skipped = skippedFrames();
-  state.sel = new Set(state.cuts.flatMap((c, i) => skipped.has(c.frame_index) ? [] : [i]));
+  state.sel = new Set(state.cuts.flatMap((c, i) => skipped.has(frameKey(c,i)) ? [] : [i]));
   $('#cardResult').hidden = false;
-  $('#resultNote').textContent = res.meta?.estimated_time ? '此视频部分时间戳不可用，时间码按帧率估算；截图仍按帧编号定位。' : '';
+  $('#resultNote').textContent = res.meta?.gallery_only ? '旧版截图已恢复；原时间码和帧号未保存，因此标记为时间未知。可直接下载；重新分析可生成精确结果，旧文件不会删除。' : res.meta?.can_edit === false ? '截图和时间记录已恢复，可直接下载。需要重新分析以重建逐帧缓存后，才能继续补帧或微调。' : res.meta?.estimated_time ? '此视频部分时间戳不可用，时间码按帧率估算；截图仍按帧编号定位。' : '';
   const grid = $('#grid'); grid.innerHTML = '';
   $('#empty').hidden = state.cuts.length !== 0;
   state.cuts.forEach((c, i) => {
@@ -253,11 +271,13 @@ function render(res, restoreParams = true) {
       item.classList.toggle('off', !selected); tag.hidden = selected; checkbox.checked = selected;
     };
     const toggle = () => {
+      if (state.busy || state.editBusy) return;
       if (state.sel.has(i)) state.sel.delete(i); else state.sel.add(i);
       paint(); rememberSelection(); updateToolbar();
     };
     const editRow = document.createElement('div'); editRow.className = 'editRow';
     const edit = document.createElement('button'); edit.className = 'btn ghost small'; edit.textContent = '逐帧微调';
+    edit.disabled = !!res.meta?.gallery_only || res.meta?.can_edit === false;
     edit.setAttribute('aria-label', '微调第 ' + (i + 1) + ' 张');
     edit.addEventListener('click', ev => {ev.stopPropagation(); beginEdit(i);});
     editRow.append(edit);
@@ -272,6 +292,7 @@ function render(res, restoreParams = true) {
 }
 
 function configureEditor(res) {
+  if (res.meta?.gallery_only || res.meta?.can_edit === false) {$('#cardEditor').hidden = true; return;}
   const player = $('#videoPlayer');
   if (state.videoSid !== state.sid) {
     state.videoSid = state.sid;
@@ -384,6 +405,7 @@ async function saveManual(action) {
     state.run = j.result.run;
     state.editIndex = null;
     closeLb(); render(j.result,false);
+    persistSelection();
     toast(action === 'add' ? '已补入关键帧，导出时会按时间排序' : '已保存逐帧微调');
   } catch (e) {
     toast(e.message || '保存失败，原有结果已保留',true);
@@ -402,7 +424,7 @@ function openLb(i) {
   if (!state.frames[i]) return;
   $('#lbImg').src = state.frames[i];
   const c = state.cuts[i];
-  $('#lbCap').textContent = '#' + String(i + 1).padStart(3, '0') + '  ' + c.label + ' · ' + (kindName[c.kind] || c.kind) + ' · 第 ' + (c.frame_index + 1) + ' 帧';
+  $('#lbCap').textContent = '#' + String(i + 1).padStart(3, '0') + '  ' + c.label + ' · ' + (kindName[c.kind] || c.kind) + (c.frame_index == null ? ' · 原帧号未知' : ' · 第 ' + (c.frame_index + 1) + ' 帧');
   $('#lbDl').href = state.frames[i].replace('/api/frame/', '/api/frame-dl/');
   $('#lbDl').download = ''; $('#lb').hidden = false;
 }
@@ -454,11 +476,13 @@ $('#btnCancel').addEventListener('click', async () => {
   finally {if (sid === state.sid) startPoll();}
 });
 $('#btnAll').addEventListener('click', () => {
+  if (state.busy || state.editBusy) return;
   state.sel = new Set(state.cuts.map((_, i) => i)); rememberSelection();
   document.querySelectorAll('#grid .item').forEach(el => {el.classList.remove('off'); el.querySelector('.tag').hidden = true; el.querySelector('input').checked = true;});
   updateToolbar();
 });
 $('#btnNone').addEventListener('click', () => {
+  if (state.busy || state.editBusy) return;
   state.sel.clear(); rememberSelection();
   document.querySelectorAll('#grid .item').forEach(el => {el.classList.add('off'); el.querySelector('.tag').hidden = false; el.querySelector('input').checked = false;});
   updateToolbar();
@@ -490,5 +514,56 @@ $('#videoPlayer').addEventListener('timeupdate', () => {
 $('#lbClose').addEventListener('click', closeLb);
 $('#lb').addEventListener('click', e => {if (e.target.id === 'lb') closeLb();});
 document.addEventListener('keydown', e => {if (e.key === 'Escape') closeLb();});
+
+async function loadWorkspace() {
+  const button = $('#btnWorkspace');
+  button.disabled = true;
+  $('#workspaceInfo').textContent = '正在读取本地工作目录…';
+  try {
+    const data = await jsonRequest('/api/workspace');
+    $('#workspaceInfo').textContent = `工作目录：${data.path} · 共 ${data.entries.length} 条记录`;
+    const list = $('#workspaceList'); list.innerHTML = ''; list.hidden = false;
+    if (!data.entries.length) {list.textContent = '工作区里还没有可恢复的记录。'; return;}
+    data.entries.forEach(entry => {
+      const row = document.createElement('div'); row.className = 'toolbar';
+      const info = document.createElement('div'); info.className = 'info';
+      info.textContent = `${entry.video_name || entry.session_id} · ${entry.frame_count || 0} 张` +
+        (entry.legacy ? ' · 旧版记录' : '') + (entry.note ? ' · ' + entry.note : '');
+      const open = document.createElement('button'); open.className = 'btn small';
+      open.textContent = '恢复记录'; open.disabled = entry.can_restore === false;
+      open.addEventListener('click', () => restoreWorkspace(entry.session_id));
+      row.append(info,open); list.appendChild(row);
+    });
+  } catch (e) {
+    $('#workspaceInfo').textContent = '读取失败：' + (e.message || '请确认工具已启动');
+  } finally {button.disabled = false;}
+}
+async function restoreWorkspace(sid) {
+  if (state.busy || state.editBusy || state.analyzing) {toast('请等待当前操作完成后再恢复记录'); return;}
+  setUploadBusy(true); stopPoll(); clearTimeout(sensTimer);
+  state.requestRevision++; state.pendingAnalyze = false;
+  try {
+    if (state.selectionChain) await state.selectionChain;
+    const j = await jsonRequest('/api/workspace/' + encodeURIComponent(sid) + '/restore', {method:'POST'}, 0);
+    pauseForFrameControl(); closeLb();
+    state.sid = sid; state.run = j.run; state.resultRun = null;
+    state.previewToken++; state.previewFrame = null; state.previewReady = false; state.previewLoading = false;
+    state.editIndex = null; state.videoSid = null; state.totalFrames = 0;
+    state.cuts = []; state.sel.clear();
+    state.jobRunning = j.status === 'running';
+    $('#exactFrame').hidden = true; $('#cardEditor').hidden = true; $('#cardResult').hidden = true;
+    $('#cardProgress').hidden = true;
+    try {sessionStorage.setItem('kf_sid',sid);} catch { /* 仍可依靠工作区恢复 */ }
+    if (Array.isArray(j.excluded)) saveStorage('kf_skipped_' + sid,j.excluded);
+    syncInfo(j,true);
+    if (j.result) render(j.result,false);
+    if (state.jobRunning) startPoll();
+    toast(j.result ? '已恢复本地工作区记录' : '已恢复视频，点击“重新分析”继续');
+  } catch (e) {
+    toast(e.message || '恢复失败，原记录未修改',true);
+    if (state.sid) startPoll(true);
+  } finally {setUploadBusy(false); updateEditorControls();}
+}
+$('#btnWorkspace').addEventListener('click',loadWorkspace);
 try { state.sid = sessionStorage.getItem('kf_sid'); } catch { /* 可在无存储模式运行 */ }
 if (state.sid) startPoll(true);
