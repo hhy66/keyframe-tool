@@ -4,8 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>视频 Cut 关键帧截取工具</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/storage.css">
+<link rel="stylesheet" href="/vendor/cropper-1.6.2.min.css">
 <link rel="stylesheet" href="/collage.css">
+<link rel="stylesheet" href="/layout.css">
 <style>
   :root{
     --accent:#4f46e5; --accent2:#7c3aed; --bg:#f3f4fb; --card:#ffffff;
@@ -51,6 +54,15 @@
   #sensVal{font-weight:700; color:var(--accent)}
   .check{display:flex; align-items:center; gap:8px; font-size:14px; cursor:pointer; user-select:none}
   .check input{width:16px; height:16px; accent-color:var(--accent)}
+  .seg{display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden}
+  .seg button{border:0; background:#fff; padding:8px 20px; font-size:14px; cursor:pointer; color:var(--text); border-right:1px solid var(--line)}
+  .seg button:last-child{border-right:0}
+  .seg button.active{background:var(--accent); color:#fff; font-weight:600}
+  .seg button:disabled{cursor:not-allowed; opacity:.6}
+  .paramSelect{padding:8px 6px; border:1px solid var(--line); border-radius:8px; font-size:14px; min-width:260px; background:#fff}
+  details.advanced{margin-top:14px; border-top:1px dashed var(--line); padding-top:10px}
+  details.advanced summary{cursor:pointer; font-size:13.5px; color:var(--muted)}
+  details.advanced .row{margin-top:12px}
   .btn{
     border:0; border-radius:9px; padding:9px 16px; font-size:14px; cursor:pointer;
     background:var(--accent); color:#fff; transition:.15s; font-weight:600;
@@ -150,23 +162,53 @@
 </head>
 <body>
 
-<header>
+<header class="appHeader">
   <h1>🎞️ 视频 Cut 关键帧截取工具</h1>
-  <p>上传视频 → 自动检测镜头切换（cut）→ 一键截取每个新镜头的首帧作为参考图</p>
+  <p>上传视频 → 自动检测镜头切换 → 截取每个镜头的画面作为参考图 · 数据只存在于本机</p>
 </header>
 
-<main>
+<div class="appShell">
+<nav id="appNav" class="appNav" aria-label="功能导航">
+  <button type="button" class="navToggle" id="navToggle" aria-expanded="true" title="收起 / 展开功能导航"><span class="navToggleIcon" aria-hidden="true">☰</span><span class="navText"><span class="navLabel">功能导航</span></span></button>
+  <div class="navGroup"><div class="navGroupTitle">开始</div>
+      <button type="button" class="navItem" data-nav="workspace" title="本地工作区"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="navText"><span class="navLabel">本地工作区</span><span class="navStatus" id="navStatus-workspace"></span></span></button>
+      <button type="button" class="navItem" data-nav="upload" title="选择视频"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2"/></svg><span class="navText"><span class="navLabel">选择视频</span><span class="navStatus" id="navStatus-upload"></span></span></button>
+  </div>
+  <div class="navGroup"><div class="navGroupTitle">分析</div>
+      <button type="button" class="navItem" data-nav="params" title="检测参数"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span class="navText"><span class="navLabel">检测参数</span><span class="navStatus" id="navStatus-params"></span></span></button>
+      <button type="button" class="navItem" data-nav="progress" title="分析进度"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span class="navText"><span class="navLabel">分析进度</span><span class="navStatus" id="navStatus-progress"></span></span></button>
+  </div>
+  <div class="navGroup"><div class="navGroupTitle">修正</div>
+      <button type="button" class="navItem" data-nav="editor" title="预览与手动选帧"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9l5 3-5 3z"/></svg><span class="navText"><span class="navLabel">预览与手动选帧</span><span class="navStatus" id="navStatus-editor"></span></span></button>
+  </div>
+  <div class="navGroup"><div class="navGroupTitle">输出</div>
+      <button type="button" class="navItem" data-nav="results" title="关键帧结果"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="13" width="7" height="7" rx="1"/><rect x="14" y="13" width="7" height="7" rx="1"/></svg><span class="navText"><span class="navLabel">关键帧结果</span><span class="navStatus" id="navStatus-results"></span></span></button>
+      <button type="button" class="navItem" data-nav="download" title="下载所选 (zip)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span class="navText"><span class="navLabel">下载所选 (zip)</span><span class="navStatus" id="navStatus-download"></span></span></button>
+      <button type="button" class="navItem" data-nav="collage" title="制作参考拼图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h18M12 3v18"/></svg><span class="navText"><span class="navLabel">制作参考拼图</span><span class="navStatus" id="navStatus-collage"></span></span></button>
+  </div>
+  <div class="navGroup"><div class="navGroupTitle">管理</div>
+      <button type="button" class="navItem" data-nav="storage" title="空间管理与清理"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span class="navText"><span class="navLabel">空间管理与清理</span><span class="navStatus" id="navStatus-storage"></span></span></button>
+  </div>
+</nav>
+<button type="button" class="navFab" id="navFab" aria-controls="appNav" aria-expanded="false">☰ 功能</button>
+<div class="navScrim" id="navScrim" hidden></div>
+<div class="appColumns">
+<main class="colLeft" id="colLeft" aria-label="素材与工具">
   <section class="card" id="cardWorkspace">
     <div class="toolbar">
-      <div class="info"><b>本地工作区</b> · 找回之前生成的关键帧</div>
+      <button type="button" class="collapseToggle" id="workspaceToggle" aria-expanded="true" aria-controls="workspaceBody">
+        <span class="chev" aria-hidden="true">▾</span><b>本地工作区</b></button>
+      <div class="info">找回之前生成的关键帧</div>
       <button class="btn ghost small" id="btnWorkspace">读取本地工作区</button>
       <button class="btn ghost small" id="btnStorage">空间管理与清理</button>
     </div>
+    <div id="workspaceBody">
     <div class="hint left" id="workspaceInfo">误关网页或重启工具后，可从工作目录恢复。关闭工具窗口后，需要先重新启动工具。</div>
     <div id="workspaceList" hidden></div>
+    </div>
   </section>
   <!-- 1. 上传 -->
-  <section class="card">
+  <section class="card" id="cardUpload">
     <h2><span class="n">1</span>选择视频文件</h2>
     <div id="drop" role="button" tabindex="0" aria-label="选择视频文件">
       <div class="big">点击选择，或将视频拖到这里</div>
@@ -186,34 +228,46 @@
     <h2><span class="n">2</span>检测参数</h2>
     <div class="row">
       <div class="field">
-        <label for="sens">灵敏度：<span id="sensVal">适中 (50)</span>
-          <span style="float:right; color:#9aa0b5">左=保守（帧少） · 右=敏感（帧多）</span></label>
-        <input type="range" id="sens" min="0" max="100" value="50">
+        <label>截到的镜头数量</label>
+        <div class="seg" role="group" aria-label="截到的镜头数量">
+          <button type="button" id="sensFew" title="只截明显的切换，大动作不容易误判">少</button>
+          <button type="button" id="sensMid">适中</button>
+          <button type="button" id="sensMany" title="尽量不漏切换，可能多出相似画面">多</button>
+        </div>
       </div>
-      <label class="check">
-        <input type="checkbox" id="chkEnds"> 同时保留视频首帧与末帧
-      </label>
-      <label class="check"><input type="checkbox" id="chkFlash" checked> 抑制单帧闪光</label>
-      <div><label for="minScene">最小镜头间隔（秒）</label>
-        <input type="number" id="minScene" min="0" max="10" step="0.05" value="0.1" style="width:90px;padding:6px">
+      <div class="field">
+        <label for="pick">每个镜头截取哪一帧</label>
+        <select id="pick" class="paramSelect">
+          <option value="first">切换后第一帧（时间最准）</option>
+          <option value="settle">切换后约 0.5 秒（避开转场残影）</option>
+          <option value="sharp">镜头开头最清晰的一帧（1.5 秒内）</option>
+        </select>
       </div>
       <button class="btn ghost small" id="btnAgain">重新分析</button>
     </div>
-    <div class="hint">参数修改后自动分析，已完成的扫描会复用。密集剪辑可减小最小间隔；需要单帧镜头时关闭闪光抑制。</div>
-  </section>
-
-  <!-- 3. 进度 -->
-  <section class="card" id="cardProgress" hidden>
-    <h2><span class="n">3</span>分析中…</h2>
-    <div class="barWrap"><div class="barFill" id="bar"></div></div>
-    <div id="stage" role="status" aria-live="polite">准备中…</div>
-    <button class="btn ghost small" id="btnCancel" hidden>取消分析</button>
-    <button class="btn ghost small" id="btnRetry" hidden>重试连接</button>
-    <div class="hint">首次分析需要逐帧解码，请耐心等待。重新分析期间，已有结果仍可预览和下载。</div>
+    <details class="advanced">
+      <summary>高级参数</summary>
+      <div class="row">
+        <div class="field">
+          <label for="sens">灵敏度：<span id="sensVal">适中 (50)</span>
+            <span style="float:right; color:#9aa0b5">左=保守（帧少） · 右=敏感（帧多）</span></label>
+          <input type="range" id="sens" min="0" max="100" value="50">
+        </div>
+        <label class="check">
+          <input type="checkbox" id="chkEnds"> 同时保留视频首帧与末帧
+        </label>
+        <label class="check"><input type="checkbox" id="chkFlash" checked> 抑制单帧闪光</label>
+        <div><label for="minScene">最小镜头间隔（秒）</label>
+          <input type="number" id="minScene" min="0" max="10" step="0.05" value="0.1" style="width:90px;padding:6px">
+        </div>
+      </div>
+      <div class="hint">密集剪辑可减小最小间隔；需要单帧镜头时关闭闪光抑制。</div>
+    </details>
+    <div class="hint">参数修改后自动重新分析，已完成的扫描会复用。截图不理想时，可在结果里单张“逐帧微调”。</div>
   </section>
 
   <section class="card" id="cardEditor" hidden>
-    <h2>视频预览与手动选帧</h2>
+    <h2><span class="n">✎</span>视频预览与手动选帧</h2>
     <div class="editorGrid">
       <div class="previewPane">
         <h3>播放视频，定位需要的画面</h3>
@@ -242,6 +296,27 @@
     </div>
   </section>
 
+  <footer>检测算法：画面逐帧颜色差分 + 闪光抑制 · 下载为原始分辨率 JPEG · 数据只存在于本机</footer>
+</main>
+<section class="colRight" id="colRight" aria-label="关键帧结果">
+  <!-- 3. 进度 -->
+  <section class="card" id="cardProgress" hidden>
+    <h2><span class="n">3</span>分析进度</h2>
+    <div class="barWrap"><div class="barFill" id="bar"></div></div>
+    <div id="stage" role="status" aria-live="polite">准备中…</div>
+    <button class="btn ghost small" id="btnCancel" hidden>取消分析</button>
+    <button class="btn ghost small" id="btnRetry" hidden>重试连接</button>
+    <div class="hint">首次分析需要逐帧解码，请耐心等待。重新分析期间，已有结果仍可预览和下载。</div>
+  </section>
+
+  <section class="card resultsEmpty" id="resultsEmpty">
+    <h2><span class="n">4</span>关键帧结果</h2>
+    <ol class="emptySteps">
+      <li><b>在左侧拖入视频</b>，或从「本地工作区」恢复之前的记录</li>
+      <li><b>自动分析</b>：进度会显示在这里，长视频首次分析需要一些时间</li>
+      <li><b>结果出现在这里</b>：单击卡片保留 / 跳过，单击缩略图看原图，再下载或制作参考拼图</li>
+    </ol>
+  </section>
   <!-- 4. 结果 -->
   <section class="card" id="cardResult" hidden>
     <h2><span class="n">4</span>关键帧结果</h2>
@@ -249,6 +324,7 @@
       <div class="info">共 <b id="cntAll">0</b> 张 · 选中 <b id="cntSel">0</b> 张</div>
       <button class="btn ghost small" id="btnAll">全选</button>
       <button class="btn ghost small" id="btnNone">全不选</button>
+      <button class="btn ghost small" id="btnSkipSimilar" hidden title="跳过与上一张几乎相同的截图，保留每组的第一张">跳过相似画面</button>
       <button class="btn ghost small" id="btnCollage">制作参考拼图</button>
       <button class="btn" id="btnDownload">⬇ 下载所选关键帧 (zip)</button>
     </div>
@@ -256,14 +332,25 @@
       💡 <b>勾选或单击卡片</b>=保留 / 跳过（跳过的不会打包）· <b>单击缩略图</b>=查看原分辨率大图并可单张下载。
       页面里的网格只是压缩预览，<b>zip 打包的均为视频原始分辨率 JPEG 图片</b>（JPEG 质量 95）。
     </div>
+    <details class="shortcuts" id="shortcutHelp">
+      <summary>快捷键：← → ↑ ↓ 移动 · 空格 保留/跳过 · Enter 看大图 · Shift+单击 范围选择（点此或按 ? 查看全部）</summary>
+      <table>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>在结果中移动当前卡片（蓝框）</td></tr>
+        <tr><td><kbd>空格</kbd> 或 <kbd>X</kbd></td><td>保留 / 跳过当前卡片</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>查看当前卡片的原图；大图里用 <kbd>←</kbd> <kbd>→</kbd> 翻页，<kbd>空格</kbd> 保留 / 跳过，<kbd>Esc</kbd> 关闭</td></tr>
+        <tr><td><kbd>E</kbd></td><td>逐帧微调当前卡片</td></tr>
+        <tr><td><kbd>Shift</kbd> + 单击</td><td>把上次单击到这次之间的卡片设为同样的保留 / 跳过</td></tr>
+        <tr><td><kbd>?</kbd></td><td>展开 / 收起本说明</td></tr>
+      </table>
+    </details>
     <div class="hint left" id="exportLimit"></div>
     <div class="hint left" id="resultNote"></div>
     <div id="grid"></div>
     <div id="empty" hidden>没有检测到镜头切换，可调高灵敏度，或在上方预览区手动补帧。</div>
   </section>
-</main>
-
-<footer>检测算法：画面逐帧颜色差分 + 闪光抑制 · 下载为原始分辨率 JPEG · 数据只存在于本机</footer>
+</section>
+</div>
+</div>
 
 <!-- 下载进度弹层 -->
 <div class="modal" id="dl" hidden>
@@ -329,51 +416,122 @@
 </div>
 <script src="/app.js"></script>
 <script src="/storage.js"></script>
+<script src="/layout.js"></script>
+<script src="/review.js"></script>
 <div id="collagePanel" class="collageOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="collageTitle">
   <div class="collageEditor">
-    <div class="collageHeader"><div><h2 id="collageTitle">制作参考拼图</h2><p id="collageSource"></p></div><button class="btn ghost" id="collageClose">关闭拼图</button></div>
+    <div class="collageHeader">
+      <div class="collageHeading"><h2 id="collageTitle">制作参考拼图</h2><p id="collageSource"></p></div>
+      <div class="collageHeaderActions">
+        <button class="btn ghost small" id="collageCsv" title="按拼图顺序导出时间码与备注，可用 Excel 打开">导出分镜表 CSV</button>
+        <button class="btn ghost small" id="collageDownloadAll" title="逐张生成所有拼图，连同分镜表打包下载">下载全部拼图 (zip)</button>
+        <button class="btn small" id="collageClose">关闭</button>
+      </div>
+    </div>
+    <a id="collageBatchLink" hidden download></a>
     <div class="collageBody">
       <aside class="collageSidebar">
-        <h3>1. 选择参考图</h3><p class="hint">这里的选择独立，不改变关键帧下载勾选。草稿保留在当前页面，刷新后需重新选择。</p>
-        <div class="editorControls"><button class="btn ghost small" id="collageSelectAll">全部加入</button><button class="btn ghost small" id="collageClear">清空拼图选图</button><button class="btn ghost small" id="collageImportSelection">带入下载勾选</button></div>
-        <div id="collagePicker" class="collagePicker"></div>
-        <h3>2. 调整顺序</h3><p class="hint">拖动图片排序，也可用上移／下移按钮。拼图从左到右、从上到下排列。</p>
-        <div id="collageOrder" class="collageOrder"></div>
+        <section>
+          <h3>1. 选择参考图</h3>
+          <div class="editorControls"><button class="btn ghost small" id="collageSelectAll">全部加入</button><button class="btn ghost small" id="collageClear">清空</button><button class="btn ghost small" id="collageImportSelection">带入下载勾选</button></div>
+          <div id="collagePicker" class="collagePicker"></div>
+          <p class="hint">这里的选择独立，不改变关键帧下载勾选。</p>
+        </section>
+        <section>
+          <h3>2. 顺序与备注</h3>
+          <p class="hint">拖动排序或用按钮调整；备注会显示在图片下方，并写入分镜表。</p>
+          <div id="collageOrder" class="collageOrder"></div>
+        </section>
       </aside>
-      <div class="collageMain">
-        <h3>3. 布局与输出</h3>
-        <div class="collageOptions">
-          <label>输出模式<select id="collageMode"><option value="original">保留原图细节（不缩放）</option><option value="share">适合分享（宽 3000 像素）</option><option value="custom">自定义宽度</option></select></label>
-          <label>布局<select id="collageGrid"><option value="2">2 × 2（4 格）</option><option value="3">3 × 3（9 格）</option></select></label>
-          <label>排版方式<select id="collageShape"><option value="source">原图比例 · 无缝拼接</option><option value="landscape">留白排版 · 横向 16:9</option><option value="square">留白排版 · 正方形 1:1</option><option value="portrait">留白排版 · 竖向 9:16</option></select></label>
-          <label>画面填充<select id="collageFit"><option value="contain">完整显示（保留整张画面）</option><option value="cover">裁剪铺满（居中裁剪）</option></select></label>
-          <label>自定义整图宽度（像素）<input id="collageWidth" type="number" min="128" max="12000" step="1" value="3000"></label>
-          <label>底色<select id="collageBackground"><option value="white">白色</option><option value="dark">深灰</option></select></label>
-          <label>下载格式<select id="collageFormat"><option value="png">PNG</option><option value="jpeg">JPEG（质量 95%）</option></select></label>
+
+      <section class="collageMain" aria-label="拼图预览">
+        <div class="collagePreviewBar">
+          <div class="collagePager"><button class="btn ghost small" id="collagePrev" aria-label="上一张拼图">‹</button><span id="collagePage"></span><button class="btn ghost small" id="collageNext" aria-label="下一张拼图">›</button></div>
+          <p id="collageDimensions"></p>
         </div>
-        <p id="collageModeNote" class="hint">无缝拼接自动跟随原图比例，不添加外边距、间距或标注栏。</p>
-        <div class="collageChecks">
-          <label><input type="checkbox" id="collageIndex"> 显示原截图序号</label>
-          <label><input type="checkbox" id="collageTime"> 显示时间码</label>
-          <label><input type="checkbox" id="collageSplit"> 超出格数时分成多张拼图</label>
+        <div id="collageStage" class="collageStage"></div>
+        <div id="collageFocusBar" class="collageFocusBar" hidden>
+          <span id="collageFocusName"></span>
+          <button class="btn ghost small" id="collageCropSelected">裁剪</button>
+          <button class="btn ghost small" id="collageResetCrop">还原完整画面</button>
+          <input id="collageFocusNote" type="text" maxlength="60" placeholder="给这张图写备注（可选）" aria-label="所选图片的备注">
         </div>
         <p id="collageSummary" class="collageNotice" role="status" aria-live="polite"></p>
-        <div class="editorControls"><button class="btn ghost small" id="collagePrev">上一张拼图</button><span id="collagePage"></span><button class="btn ghost small" id="collageNext">下一张拼图</button></div>
-        <p id="collageDimensions" class="hint"></p>
-        <h3>交互排版预览</h3>
-        <p class="hint">拖动画面交换位置。分享／自定义模式选定格子比例并裁剪铺满后，可选中一格拖动裁剪及缩放。</p>
-        <div class="editorControls"><button class="btn ghost small" id="collageCropMode">编辑单图裁剪</button><button class="btn ghost small" id="collageZoomIn" disabled>放大所选画面</button><button class="btn ghost small" id="collageZoomOut" disabled>缩小所选画面</button><button class="btn ghost small" id="collageResetCrop" disabled>复位所选裁剪</button></div>
-        <div id="collageStage" class="collageStage"></div>
-        <h3>实际成品</h3>
-        <div id="collagePreview" class="collagePreview">点击“生成成品”后，显示实际导出文件的预览。</div>
         <p id="collageStatus" role="status" aria-live="polite"></p>
-        <div class="editorControls"><button class="btn" id="collageRender">生成成品</button><button class="btn ghost small" id="collageFitView" disabled>适应窗口</button><button class="btn ghost small" id="collageActual" disabled>100% 查看成品</button><a class="btn ghost" id="collageDownload" role="button" aria-disabled="true">下载当前拼图</a></div>
-        <p class="hint">使用原图在本机生成。原尺寸 PNG 保留解码后的原图像素；分享模式会缩小。空格留空、不重复填图，多张拼图逐张生成下载。</p>
+        <div class="collageActions">
+          <button class="btn" id="collageRender">生成成品并查看</button>
+          <button class="btn ghost" id="collageShowResult" disabled>查看上次成品</button>
+        </div>
+        <p class="hint">拖动画面到另一张上交换位置；单击选中，双击裁剪。预览为近似效果，以成品为准。</p>
+      </section>
+
+      <aside class="collageSettings" aria-label="拼图设置">
+        <details open>
+          <summary>排版</summary>
+          <label>输出<select id="collageMode"><option value="share">适合分享（宽 3000 像素）</option><option value="custom">自定义宽度</option><option value="original">保留原图细节（不缩放）</option></select></label>
+          <label id="collageWidthField">整图宽度（像素）<input id="collageWidth" type="number" min="128" max="12000" step="1" value="3000"></label>
+          <label>排版方式<select id="collageLayout"><option value="justified">智能排版（按画面比例自动分行）</option><option value="grid">固定网格</option></select></label>
+          <label>每张最多<select id="collagePerPage"><option value="4">4 张（2 列）</option><option value="9">9 张（3 列）</option><option value="12">12 张（4 列）</option><option value="16">16 张（4 列）</option></select></label>
+          <label id="collageCanvasField">整体形状<select id="collageCanvas"><option value="auto">跟随画面比例</option><option value="landscape">偏横向 16:9</option><option value="square">接近正方形 1:1</option><option value="portrait">偏竖向 3:4</option></select></label>
+          <label id="collageShapeField">格子比例<select id="collageShape"><option value="source">跟随原图比例</option><option value="landscape">横向 16:9</option><option value="square">正方形 1:1</option><option value="portrait">竖向 9:16</option></select></label>
+          <label id="collageFitField">画面填充<select id="collageFit"><option value="cover">裁剪铺满（可调整位置）</option><option value="contain">完整显示（格内留白）</option></select></label>
+          <label>下载格式<select id="collageFormat"><option value="png">PNG（无损）</option><option value="jpeg">JPEG（质量 95%，文件更小）</option></select></label>
+          <label class="collageCheck"><input type="checkbox" id="collageSplit"> 超出张数时自动分成多张</label>
+          <p id="collageModeNote" class="hint"></p>
+        </details>
+        <details open>
+          <summary>样式</summary>
+          <label>样式预设<select id="collagePreset"><option value="card">浅灰卡片（间距 + 圆角 + 阴影）</option><option value="white">白底细边</option><option value="gallery">深色画廊</option><option value="clean">无缝紧凑</option><option value="custom">自定义</option></select></label>
+          <div class="collagePair">
+            <label>间距<select id="collageGap"><option value="none">无</option><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label>
+            <label>圆角<select id="collageRadius"><option value="none">无</option><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label>
+          </div>
+          <p id="collageRadiusNote" class="hint" hidden>没有间距时不加圆角，避免拼缝处露出底色。</p>
+          <label>底色<select id="collageBackground"><option value="white">白色</option><option value="light">浅灰</option><option value="dark">深灰</option><option value="black">黑色</option></select></label>
+          <label class="collageCheck"><input type="checkbox" id="collageShadow"> 图片阴影</label>
+          <label>标题（可选）<input id="collageTitleText" type="text" maxlength="40" placeholder="例如：视频名称 / 镜头参考"></label>
+        </details>
+        <details open>
+          <summary>标注</summary>
+          <div class="collageChecks">
+            <label class="collageCheck"><input type="checkbox" id="collageOrderLabel"> 拼图内序号</label>
+            <label class="collageCheck"><input type="checkbox" id="collageIndex"> 原截图编号</label>
+            <label class="collageCheck"><input type="checkbox" id="collageTime"> 时间码</label>
+          </div>
+          <label>标注位置<select id="collageLabelPosition"><option value="tr">画面右上角</option><option value="tl">画面左上角</option><option value="br">画面右下角</option><option value="bl">画面左下角</option><option value="below">图片下方（不遮挡画面）</option></select></label>
+          <p class="hint">视频自带字幕多在下方，标注默认放右上角。备注总是显示在图片下方。</p>
+        </details>
+      </aside>
+    </div>
+  </div>
+
+  <div id="collageResult" class="collageModal" hidden role="dialog" aria-modal="true" aria-labelledby="collageResultTitle">
+    <div class="collageModalBox">
+      <div class="collageModalHead">
+        <h3 id="collageResultTitle">成品预览</h3>
+        <span id="collageResultInfo" class="hint"></span>
+        <span class="cropSpacer"></span>
+        <button class="btn ghost small" id="collageFitView" disabled>适应窗口</button>
+        <button class="btn ghost small" id="collageActual" disabled>100% 查看</button>
+        <a class="btn small" id="collageDownload" role="button" aria-disabled="true">下载这张</a>
+        <button class="btn ghost small" id="collageResultClose">关闭</button>
       </div>
+      <div id="collagePreview" class="collagePreview"></div>
+    </div>
+  </div>
+
+  <div id="cropDialog" class="collageModal" hidden role="dialog" aria-modal="true" aria-labelledby="cropTitle">
+    <div class="collageModalBox">
+      <div class="collageModalHead"><h3 id="cropTitle">裁剪原图</h3><span class="hint">只影响拼图，不修改原截图文件</span></div>
+      <div id="cropRatios" class="editorControls"></div>
+      <div class="cropArea"><img id="cropImage" alt="待裁剪的原图"></div>
+      <p id="cropInfo" class="hint"></p>
+      <div class="editorControls"><button class="btn ghost small" id="cropZoomIn">放大</button><button class="btn ghost small" id="cropZoomOut">缩小</button><button class="btn ghost small" id="cropReset">还原完整画面</button><span class="cropSpacer"></span><button class="btn ghost" id="cropCancel">取消</button><button class="btn" id="cropApply">应用裁剪</button></div>
     </div>
   </div>
 </div>
 <script src="/vendor/konva-10.7.0.min.js"></script>
+<script src="/vendor/cropper-1.6.2.min.js"></script>
 <script src="/collage-stage.js"></script>
 <script src="/collage.js"></script>
 </body>

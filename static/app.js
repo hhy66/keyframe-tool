@@ -1,16 +1,57 @@
 const $ = s => document.querySelector(s);
 const state = {
-  sid: null, busy: false, pollTimer: null, pollToken: 0, requestRevision: 0,
-  analyzing: false, pendingAnalyze: false, run: null, resultRun: null,
-  sens: 50, ends: false, minimum: 0.1, flash: true, maxExport: 500,
-  cuts: [], thumbs: [], frames: [], sel: new Set(), dlBusy: false,
-  videoSid: null, totalFrames: 0, jobRunning: false, editBusy: false,
-  previewFrame: null, previewTime: 0, previewReady: false, previewToken: 0,
-  editIndex: null, editorBase: null,
-  ignorePause: false, previewLoading: false,
+  sid: null,
+  busy: false,
+  pollTimer: null,
+  pollToken: 0,
+  requestRevision: 0,
+  analyzing: false,
+  pendingAnalyze: false,
+  run: null,
+  resultRun: null,
+  sens: 50,
+  ends: false,
+  minimum: 0.1,
+  flash: true,
+  pick: 'first',
+  maxExport: 500,
+  cuts: [],
+  thumbs: [],
+  frames: [],
+  sel: new Set(),
+  dlBusy: false,
+  videoSid: null,
+  totalFrames: 0,
+  jobRunning: false,
+  editBusy: false,
+  previewFrame: null,
+  previewTime: 0,
+  previewReady: false,
+  previewToken: 0,
+  editIndex: null,
+  editorBase: null,
+  ignorePause: false,
+  previewLoading: false,
 };
-const kindName = {cut: '镜头切换', head: '首帧', tail: '末帧', manual: '手动补帧', adjusted: '已微调', archived: '旧截图'};
-const sensName = v => v < 33 ? '保守' : v > 66 ? '敏感' : '适中';
+const kindName = {
+  cut: '镜头切换',
+  head: '首帧',
+  tail: '末帧',
+  manual: '手动补帧',
+  adjusted: '已微调',
+  archived: '旧截图',
+};
+const sensName = v => (v < 33 ? '保守' : v > 66 ? '敏感' : '适中');
+// 首次使用只需选“少 / 适中 / 多”，滑块留在高级参数里。
+const SENS_PRESETS = [
+  ['#sensFew', 25],
+  ['#sensMid', 50],
+  ['#sensMany', 80],
+];
+function showSens() {
+  $('#sensVal').textContent = `${sensName(state.sens)} (${state.sens})`;
+  SENS_PRESETS.forEach(([id, value]) => $(id).classList.toggle('active', state.sens === value));
+}
 let sensTimer = null;
 
 function toast(msg, err) {
@@ -18,45 +59,64 @@ function toast(msg, err) {
   t.textContent = msg;
   t.className = 'show' + (err ? ' err' : '');
   clearTimeout(t._h);
-  t._h = setTimeout(() => t.className = '', 5000);
+  t._h = setTimeout(() => (t.className = ''), 5000);
 }
 function fmtDur(s) {
   if (!Number.isFinite(s)) return '?';
   s = Math.round(s);
-  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  const h = Math.floor(s / 3600),
+    m = Math.floor((s % 3600) / 60),
+    sec = s % 60;
   return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
 }
 function readStorage(key, fallback) {
-  try { return JSON.parse(sessionStorage.getItem(key)) ?? fallback; } catch { return fallback; }
+  try {
+    return JSON.parse(sessionStorage.getItem(key)) ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 function saveStorage(key, value) {
-  try { sessionStorage.setItem(key, JSON.stringify(value)); } catch { /* 存储禁用时仍可使用 */ }
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* 存储禁用时仍可使用 */
+  }
 }
 function skippedFrames() {
   const values = readStorage('kf_skipped_' + state.sid, []);
   return new Set(Array.isArray(values) ? values : []);
 }
 function frameKey(cut, index) {
-  return cut.frame_index ?? `legacy:${state.resultRun}:${cut.file_index ?? index}`;
+  // 跳过状态按检测到的切换帧记录，换截取策略重新分析后仍对应同一个镜头。
+  return cut.source_frame ?? cut.frame_index ?? `legacy:${state.resultRun}:${cut.file_index ?? index}`;
 }
 function persistSelection() {
   if (!state.sid || !state.resultRun) return Promise.resolve();
-  const sid = state.sid, run = state.resultRun, skipped = skippedFrames();
+  const sid = state.sid,
+    run = state.resultRun,
+    skipped = skippedFrames();
   const excluded = state.cuts.map(frameKey).filter(key => skipped.has(key));
   const previous = state.selectionChain || Promise.resolve();
-  state.selectionChain = previous.then(() => jsonRequest('/api/workspace/' + sid + '/selection', {
-    method:'PUT', headers:{'Content-Type':'application/json'}, keepalive:true,
-    body:JSON.stringify({run, excluded}),
-  })).catch(() => {
-    if (sid === state.sid) toast('选择状态暂未保存到工作区，请确认工具连接后重新勾选。',true);
-  });
+  state.selectionChain = previous
+    .then(() =>
+      jsonRequest('/api/workspace/' + sid + '/selection', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        keepalive: true,
+        body: JSON.stringify({run, excluded}),
+      }),
+    )
+    .catch(() => {
+      if (sid === state.sid) toast('选择状态暂未保存到工作区，请确认工具连接后重新勾选。', true);
+    });
   return state.selectionChain;
 }
 function rememberSelection() {
   const skipped = skippedFrames();
   state.cuts.forEach((c, i) => {
-    if (state.sel.has(i)) skipped.delete(frameKey(c,i));
-    else skipped.add(frameKey(c,i));
+    if (state.sel.has(i)) skipped.delete(frameKey(c, i));
+    else skipped.add(frameKey(c, i));
   });
   saveStorage('kf_skipped_' + state.sid, [...skipped]);
   persistSelection();
@@ -73,7 +133,9 @@ async function jsonRequest(url, options = {}, timeout = 15000) {
       throw error;
     }
     return data;
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 function syncInfo(info, params = true) {
   $('#cardParams').hidden = false;
@@ -88,22 +150,28 @@ function syncInfo(info, params = true) {
     state.ends = info.params.include_ends;
     state.minimum = info.params.min_scene_seconds ?? 0.1;
     state.flash = info.params.suppress_flash ?? true;
+    state.pick = info.params.pick || 'first';
     $('#sens').value = state.sens;
-    $('#sensVal').textContent = `${sensName(state.sens)} (${state.sens})`;
+    $('#pick').value = state.pick;
+    showSens();
     $('#chkEnds').checked = state.ends;
     $('#minScene').value = state.minimum;
     $('#chkFlash').checked = state.flash;
   }
+  showSens();
 }
 function setUploadBusy(busy) {
   state.busy = busy;
-  ['#sens', '#chkEnds', '#minScene', '#chkFlash', '#btnAgain'].forEach(s => $(s).disabled = busy);
+  ['#sens', '#chkEnds', '#minScene', '#chkFlash', '#pick', '#btnAgain', ...SENS_PRESETS.map(([id]) => id)].forEach(
+    s => ($(s).disabled = busy),
+  );
 }
 
 async function upload(file) {
   if (state.busy || state.editBusy || !file) return;
   if (!/\.(mp4|mov|avi|mkv|webm|m4v|ts|flv|wmv|mpg|mpeg|3gp|ogv)$/i.test(file.name)) {
-    toast('不支持的文件格式', true); return;
+    toast('不支持的文件格式', true);
+    return;
   }
   setUploadBusy(true);
   stopPoll();
@@ -113,20 +181,32 @@ async function upload(file) {
   toast('正在复制视频到本机工作目录…');
   let uploaded = false;
   try {
-    const fd = new FormData(); fd.append('file', file);
-    const j = await jsonRequest('/api/upload', {method:'POST', body:fd}, 0);
+    const fd = new FormData();
+    fd.append('file', file);
+    const j = await jsonRequest('/api/upload', {method: 'POST', body: fd}, 0);
+    // 复制已完成：收起“正在复制”提示，进度改由分析进度显示。
+    if ($('#toast').textContent === '正在复制视频到本机工作目录…') $('#toast').className = '';
     state.sid = j.session_id;
-    try { sessionStorage.setItem('kf_sid', state.sid); } catch { /* 可继续处理 */ }
+    try {
+      sessionStorage.setItem('kf_sid', state.sid);
+    } catch {
+      /* 可继续处理 */
+    }
     state.run = state.resultRun = null;
-    state.previewToken++; state.previewFrame = null; state.previewReady = false; state.previewLoading = false;
-    state.editIndex = null; state.totalFrames = 0;
+    state.previewToken++;
+    state.previewFrame = null;
+    state.previewReady = false;
+    state.previewLoading = false;
+    state.editIndex = null;
+    state.totalFrames = 0;
     $('#cardEditor').hidden = true;
     $('#exactFrame').hidden = true;
     $('#frameSeek').value = 0;
     $('#seekTime').value = 0;
     $('#previewLabel').textContent = '分析完成后可定位和补帧。';
     pauseForFrameControl();
-    state.cuts = []; state.sel.clear();
+    state.cuts = [];
+    state.sel.clear();
     closeLb();
     $('#cardResult').hidden = true;
     syncInfo(j, false);
@@ -145,9 +225,14 @@ async function analyze() {
   clearTimeout(sensTimer);
   stopPoll();
   const revision = ++state.requestRevision;
-  if (state.analyzing) { state.pendingAnalyze = true; return; }
+  if (state.analyzing) {
+    state.pendingAnalyze = true;
+    return;
+  }
   if (!Number.isFinite(state.minimum) || state.minimum < 0 || state.minimum > 10) {
-    toast('最小镜头间隔须为 0～10 秒', true); startPoll(); return;
+    toast('最小镜头间隔须为 0～10 秒', true);
+    startPoll();
+    return;
   }
   state.analyzing = true;
   state.jobRunning = true;
@@ -161,9 +246,16 @@ async function analyze() {
   $('#btnRetry').hidden = true;
   try {
     const j = await jsonRequest('/api/analyze', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({session_id:sid, sensitivity:state.sens, include_ends:state.ends,
-        min_scene_seconds:state.minimum, suppress_flash:state.flash}),
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        session_id: sid,
+        sensitivity: state.sens,
+        include_ends: state.ends,
+        min_scene_seconds: state.minimum,
+        suppress_flash: state.flash,
+        pick: state.pick,
+      }),
     });
     if (revision !== state.requestRevision || sid !== state.sid) return;
     state.run = j.run;
@@ -199,7 +291,7 @@ async function poll(token, restoreParams, failures) {
     state.run = j.run;
     state.maxExport = j.max_export || 500;
     state.jobRunning = j.status === 'running';
-    if (restoreParams && Array.isArray(j.excluded)) saveStorage('kf_skipped_' + sid,j.excluded);
+    if (restoreParams && Array.isArray(j.excluded)) saveStorage('kf_skipped_' + sid, j.excluded);
     syncInfo(j, restoreParams);
     $('#btnRetry').hidden = true;
     if (j.result && (restoreParams || state.resultRun !== j.result.run)) render(j.result, false);
@@ -227,15 +319,22 @@ async function poll(token, restoreParams, failures) {
       $('#stage').textContent = '未找到当前会话，可点击上方“读取本地工作区”恢复记录。';
       $('#btnRetry').hidden = true;
       $('#cardResult').hidden = true;
-      state.sid = null; state.resultRun = null;
-      state.previewToken++; state.previewReady = false;
+      state.sid = null;
+      state.resultRun = null;
+      state.previewToken++;
+      state.previewReady = false;
       $('#cardEditor').hidden = true;
       pauseForFrameControl();
-      try { sessionStorage.removeItem('kf_sid'); } catch { /* 忽略不可用存储 */ }
+      try {
+        sessionStorage.removeItem('kf_sid');
+      } catch {
+        /* 忽略不可用存储 */
+      }
       return;
     }
     const count = failures + 1;
-    $('#stage').textContent = count < 5 ? `连接暂时中断，正在重试 (${count}/5)…` : '连接失败。请确认工具仍在运行，再点击重试连接。';
+    $('#stage').textContent =
+      count < 5 ? `连接暂时中断，正在重试 (${count}/5)…` : '连接失败。请确认工具仍在运行，再点击重试连接。';
     $('#btnRetry').hidden = count < 5;
     if (count < 5) state.pollTimer = setTimeout(() => poll(token, restoreParams, count), Math.min(5000, count * 1000));
   }
@@ -245,54 +344,121 @@ function render(res, restoreParams = true) {
   syncInfo(res, restoreParams);
   if (state.resultRun !== res.run) state.editIndex = null;
   state.resultRun = res.run;
-  state.cuts = res.cuts || []; state.thumbs = res.thumbs || []; state.frames = res.frames || [];
+  state.cuts = res.cuts || [];
+  state.thumbs = res.thumbs || [];
+  state.frames = res.frames || [];
   const skipped = skippedFrames();
-  state.sel = new Set(state.cuts.flatMap((c, i) => skipped.has(frameKey(c,i)) ? [] : [i]));
+  state.sel = new Set(state.cuts.flatMap((c, i) => (skipped.has(frameKey(c, i)) ? [] : [i])));
   $('#cardResult').hidden = false;
-  $('#resultNote').textContent = res.meta?.gallery_only ? '旧版截图已恢复；原时间码和帧号未保存，因此标记为时间未知。可直接下载；重新分析可生成精确结果，旧文件不会删除。' : res.meta?.can_edit === false ? '截图和时间记录已恢复，可直接下载。需要重新分析以重建逐帧缓存后，才能继续补帧或微调。' : res.meta?.estimated_time ? '此视频部分时间戳不可用，时间码按帧率估算；截图仍按帧编号定位。' : '';
-  const grid = $('#grid'); grid.innerHTML = '';
+  $('#resultNote').textContent = res.meta?.gallery_only
+    ? '旧版截图已恢复；原时间码和帧号未保存，因此标记为时间未知。可直接下载；重新分析可生成精确结果，旧文件不会删除。'
+    : res.meta?.can_edit === false
+      ? '截图和时间记录已恢复，可直接下载。需要重新分析以重建逐帧缓存后，才能继续补帧或微调。'
+      : res.meta?.estimated_time
+        ? '此视频部分时间戳不可用，时间码按帧率估算；截图仍按帧编号定位。'
+        : '';
+  const grid = $('#grid');
+  grid.innerHTML = '';
   $('#empty').hidden = state.cuts.length !== 0;
+  state.cards = [];
+  state.anchor = null;
+  if (state.cursor != null && state.cursor >= state.cuts.length) state.cursor = null;
   state.cuts.forEach((c, i) => {
-    const item = document.createElement('div'); item.className = 'item';
+    const item = document.createElement('div');
+    item.className = 'item';
     const img = document.createElement('img');
-    img.loading = 'lazy'; img.src = state.thumbs[i]; img.alt = c.label;
-    const eye = document.createElement('span'); eye.className = 'eye'; eye.textContent = '🔍 原图';
-    const cap = document.createElement('div'); cap.className = 'cap';
+    img.loading = 'lazy';
+    img.src = state.thumbs[i];
+    img.alt = c.label;
+    const eye = document.createElement('span');
+    eye.className = 'eye';
+    eye.textContent = '🔍 原图';
+    const cap = document.createElement('div');
+    cap.className = 'cap';
     const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox'; checkbox.checked = state.sel.has(i);
+    checkbox.type = 'checkbox';
+    checkbox.checked = state.sel.has(i);
     checkbox.setAttribute('aria-label', '保留第 ' + (i + 1) + ' 张');
-    const idx = document.createElement('span'); idx.className = 'idx'; idx.textContent = '#' + String(i + 1).padStart(3, '0');
-    const tm = document.createElement('span'); tm.className = 'time'; tm.textContent = c.label;
-    const bd = document.createElement('span'); bd.className = 'badge ' + c.kind; bd.textContent = kindName[c.kind] || c.kind;
+    const idx = document.createElement('span');
+    idx.className = 'idx';
+    idx.textContent = '#' + String(i + 1).padStart(3, '0');
+    const tm = document.createElement('span');
+    tm.className = 'time';
+    tm.textContent = c.label;
+    const bd = document.createElement('span');
+    bd.className = 'badge ' + c.kind;
+    bd.textContent = kindName[c.kind] || c.kind;
     cap.append(checkbox, idx, tm, bd);
-    const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = '已跳过';
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = '已跳过';
     const paint = () => {
       const selected = state.sel.has(i);
-      item.classList.toggle('off', !selected); tag.hidden = selected; checkbox.checked = selected;
+      item.classList.toggle('off', !selected);
+      tag.hidden = selected;
+      checkbox.checked = selected;
     };
-    const toggle = () => {
+    // Shift+单击：把上次单击到这次之间的所有卡片设为与这张相同的保留 / 跳过状态。
+    const toggle = ev => {
       if (state.busy || state.editBusy) return;
-      if (state.sel.has(i)) state.sel.delete(i); else state.sel.add(i);
-      paint(); rememberSelection(); updateToolbar();
+      const keep = !state.sel.has(i);
+      const range = ev?.shiftKey && state.anchor != null && state.anchor !== i;
+      const from = range ? Math.min(state.anchor, i) : i,
+        to = range ? Math.max(state.anchor, i) : i;
+      const indexes = [];
+      for (let k = from; k <= to; k++) indexes.push(k);
+      state.anchor = i;
+      setKept(indexes, keep);
+      if (typeof Review !== 'undefined') Review.clicked(i);
+      else state.cursor = i;
     };
-    const editRow = document.createElement('div'); editRow.className = 'editRow';
-    const edit = document.createElement('button'); edit.className = 'btn ghost small'; edit.textContent = '逐帧微调';
+    const editRow = document.createElement('div');
+    editRow.className = 'editRow';
+    const edit = document.createElement('button');
+    edit.className = 'btn ghost small';
+    edit.textContent = '逐帧微调';
     edit.disabled = !!res.meta?.gallery_only || res.meta?.can_edit === false;
     edit.setAttribute('aria-label', '微调第 ' + (i + 1) + ' 张');
-    edit.addEventListener('click', ev => {ev.stopPropagation(); beginEdit(i);});
+    edit.addEventListener('click', ev => {
+      ev.stopPropagation();
+      beginEdit(i);
+    });
     editRow.append(edit);
     item.append(img, eye, tag, cap, editRow);
-    img.addEventListener('click', ev => {ev.stopPropagation(); openLb(i);});
-    checkbox.addEventListener('click', ev => {ev.stopPropagation(); toggle();});
+    img.addEventListener('click', ev => {
+      ev.stopPropagation();
+      openLb(i);
+    });
+    checkbox.addEventListener('click', ev => {
+      ev.stopPropagation();
+      toggle();
+    });
     item.addEventListener('click', toggle);
-    paint(); grid.appendChild(item);
+    state.cards.push({item, cap, paint, toggle, edit});
+    paint();
+    grid.appendChild(item);
   });
   updateToolbar();
   configureEditor(res);
+  if (typeof onResultsRendered === 'function') onResultsRendered(res);
+}
+
+function setKept(indexes, keep) {
+  if (state.busy || state.editBusy || !indexes.length) return;
+  indexes.forEach(i => {
+    if (keep) state.sel.add(i);
+    else state.sel.delete(i);
+    state.cards[i]?.paint();
+  });
+  rememberSelection();
+  updateToolbar();
 }
 
 function configureEditor(res) {
-  if (res.meta?.gallery_only || res.meta?.can_edit === false) {$('#cardEditor').hidden = true; return;}
+  if (res.meta?.gallery_only || res.meta?.can_edit === false) {
+    $('#cardEditor').hidden = true;
+    return;
+  }
   const player = $('#videoPlayer');
   if (state.videoSid !== state.sid) {
     state.videoSid = state.sid;
@@ -306,14 +472,17 @@ function configureEditor(res) {
   $('#frameSeek').max = Math.max(0, state.totalFrames - 1);
   if (state.previewFrame === null && res.cuts.length) {
     const first = res.cuts[0];
-    state.previewFrame = first.frame_index; state.previewTime = first.time; state.previewReady = true;
-    $('#exactFrame').src = res.frames[0]; $('#exactFrame').hidden = false;
+    state.previewFrame = first.frame_index;
+    state.previewTime = first.time;
+    state.previewReady = true;
+    $('#exactFrame').src = res.frames[0];
+    $('#exactFrame').hidden = false;
     $('#frameSeek').value = first.frame_index;
     $('#seekTime').value = first.time;
     $('#previewLabel').textContent = `${first.label} · 第 ${first.frame_index + 1} / ${state.totalFrames} 帧`;
   }
   updateEditorControls();
-  if (state.previewFrame === null && !state.jobRunning && state.totalFrames) requestPreview({frame_index:0});
+  if (state.previewFrame === null && !state.jobRunning && state.totalFrames) requestPreview({frame_index: 0});
 }
 function updateEditorControls() {
   const blocked = state.busy || state.editBusy || state.jobRunning || !state.resultRun;
@@ -328,11 +497,13 @@ function updateEditorControls() {
   $('#btnCancelEdit').hidden = state.editIndex === null;
   $('#btnCancelEdit').disabled = state.editBusy;
   $('#btnAddFrame').hidden = state.editIndex !== null;
-  $('#editorMode').textContent = state.editIndex === null ? '补入新的关键帧' : `微调第 ${state.editIndex + 1} 张 · 保存后替换该截图`;
+  $('#editorMode').textContent =
+    state.editIndex === null ? '补入新的关键帧' : `微调第 ${state.editIndex + 1} 张 · 保存后替换该截图`;
 }
 async function requestPreview(position) {
   if (!state.sid || !state.totalFrames || state.editBusy || state.jobRunning) return;
-  const sid = state.sid, token = ++state.previewToken;
+  const sid = state.sid,
+    token = ++state.previewToken;
   state.previewLoading = true;
   state.previewReady = false;
   updateEditorControls();
@@ -340,19 +511,28 @@ async function requestPreview(position) {
   // 一个会话只有一个解码器；等待上一张读完，中间过期的定位请求直接跳过。
   const previous = state.previewChain || Promise.resolve();
   let release;
-  state.previewChain = new Promise(resolve => {release = resolve;});
+  state.previewChain = new Promise(resolve => {
+    release = resolve;
+  });
   await previous;
-  if (token !== state.previewToken || sid !== state.sid) {release(); return;}
+  if (token !== state.previewToken || sid !== state.sid) {
+    release();
+    return;
+  }
   const query = position.frame_index !== undefined ? 'frame_index=' + position.frame_index : 'time=' + position.time;
   try {
     const p = await jsonRequest('/api/preview/' + sid + '?' + query);
     if (token !== state.previewToken || sid !== state.sid) return;
     if (!Number.isInteger(p.frame_index)) throw new Error('无法定位该帧');
-    const image = new Image(); image.src = p.image_url;
+    const image = new Image();
+    image.src = p.image_url;
     await image.decode();
     if (token !== state.previewToken || sid !== state.sid) return;
-    state.previewFrame = p.frame_index; state.previewTime = p.time; state.previewReady = true;
-    $('#exactFrame').src = image.src; $('#exactFrame').hidden = false;
+    state.previewFrame = p.frame_index;
+    state.previewTime = p.time;
+    state.previewReady = true;
+    $('#exactFrame').src = image.src;
+    $('#exactFrame').hidden = false;
     $('#frameSeek').value = p.frame_index;
     $('#seekTime').value = Number(p.time.toFixed(6));
     $('#previewLabel').textContent = `${p.label} · 第 ${p.frame_index + 1} / ${state.totalFrames} 帧`;
@@ -369,98 +549,201 @@ async function requestPreview(position) {
 }
 function pauseForFrameControl() {
   const player = $('#videoPlayer');
-  if (!player.paused) {state.ignorePause = true; player.pause();}
+  if (!player.paused) {
+    state.ignorePause = true;
+    player.pause();
+  }
 }
 function stepPreview(delta) {
   pauseForFrameControl();
   const target = Math.max(0, Math.min(state.totalFrames - 1, (state.previewFrame ?? 0) + delta));
-  return requestPreview({frame_index:target});
+  return requestPreview({frame_index: target});
 }
 function beginEdit(index) {
-  if (state.jobRunning || state.editBusy || state.busy) {toast('请等当前任务完成后再微调'); return;}
-  const c = state.cuts[index]; if (!c) return;
-  state.editIndex = index; state.editorBase = state.resultRun;
+  if (state.jobRunning || state.editBusy || state.busy) {
+    toast('请等当前任务完成后再微调');
+    return;
+  }
+  const c = state.cuts[index];
+  if (!c) return;
+  state.editIndex = index;
+  state.editorBase = state.resultRun;
   pauseForFrameControl();
-  $('#cardEditor').scrollIntoView({behavior:'smooth', block:'start'});
-  return requestPreview({frame_index:c.frame_index});
+  $('#cardEditor').scrollIntoView({behavior: 'smooth', block: 'start'});
+  return requestPreview({frame_index: c.frame_index});
 }
 async function saveManual(action) {
   if (!state.previewReady || state.jobRunning || state.editBusy || state.busy || !state.resultRun) return;
   if (action === 'move' && state.editIndex === null) return;
-  const sid = state.sid, base = state.editorBase;
-  const target = state.previewFrame, index = state.editIndex;
-  clearTimeout(sensTimer); stopPoll();
+  const sid = state.sid,
+    base = state.editorBase;
+  const target = state.previewFrame,
+    index = state.editIndex;
+  clearTimeout(sensTimer);
+  stopPoll();
   state.editBusy = true;
-  setUploadBusy(true); updateEditorControls();
+  setUploadBusy(true);
+  updateEditorControls();
   try {
-    const j = await jsonRequest('/api/edit/' + sid, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({base_run:base,action,frame_index:target,index}),
-    }, 0);
+    const j = await jsonRequest(
+      '/api/edit/' + sid,
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({base_run: base, action, frame_index: target, index}),
+      },
+      0,
+    );
     if (sid !== state.sid) return;
     const skipped = skippedFrames();
-    if (j.from_frame !== null && skipped.has(j.from_frame)) {skipped.delete(j.from_frame); skipped.add(j.to_frame);}
+    if (j.from_frame !== null && skipped.has(j.from_frame)) {
+      skipped.delete(j.from_frame);
+      skipped.add(j.to_frame);
+    }
     if (action === 'add') skipped.delete(j.to_frame);
-    saveStorage('kf_skipped_' + sid,[...skipped]);
+    saveStorage('kf_skipped_' + sid, [...skipped]);
     state.run = j.result.run;
     state.editIndex = null;
-    closeLb(); render(j.result,false);
+    closeLb();
+    render(j.result, false);
     persistSelection();
     toast(action === 'add' ? '已补入 1 张关键帧，其他图片未复制' : '已更新 1 张关键帧，其他图片未复制');
   } catch (e) {
-    toast(e.message || '保存失败，原有结果已保留',true);
+    toast(e.message || '保存失败，原有结果已保留', true);
     if (sid === state.sid) startPoll(true);
   } finally {
     state.editBusy = false;
-    setUploadBusy(false); updateEditorControls();
+    setUploadBusy(false);
+    updateEditorControls();
   }
 }
 function updateToolbar() {
-  $('#cntAll').textContent = state.cuts.length; $('#cntSel').textContent = state.sel.size;
+  $('#cntAll').textContent = state.cuts.length;
+  $('#cntSel').textContent = state.sel.size;
   $('#btnDownload').disabled = state.dlBusy || state.sel.size === 0 || state.sel.size > state.maxExport;
-  $('#exportLimit').textContent = `单次最多 ${state.maxExport} 张` + (state.sel.size > state.maxExport ? '，请减少选择后下载。' : '；下载交给浏览器保存。');
+  $('#exportLimit').textContent =
+    `单次最多 ${state.maxExport} 张` +
+    (state.sel.size > state.maxExport ? '，请减少选择后下载。' : '；下载交给浏览器保存。');
+  if (typeof Review !== 'undefined') Review.updateSkipButton();
 }
 function openLb(i) {
   if (!state.frames[i]) return;
+  state.lbIndex = i;
   $('#lbImg').src = state.frames[i];
   const c = state.cuts[i];
-  $('#lbCap').textContent = '#' + String(i + 1).padStart(3, '0') + '  ' + c.label + ' · ' + (kindName[c.kind] || c.kind) + (c.frame_index == null ? ' · 原帧号未知' : ' · 第 ' + (c.frame_index + 1) + ' 帧');
+  $('#lbCap').textContent =
+    '#' +
+    String(i + 1).padStart(3, '0') +
+    '  ' +
+    c.label +
+    ' · ' +
+    (kindName[c.kind] || c.kind) +
+    (c.frame_index == null ? ' · 原帧号未知' : ' · 第 ' + (c.frame_index + 1) + ' 帧');
   $('#lbDl').href = state.frames[i].replace('/api/frame/', '/api/frame-dl/');
-  $('#lbDl').download = ''; $('#lb').hidden = false;
+  $('#lbDl').download = '';
+  $('#lb').hidden = false;
 }
-function closeLb() { $('#lb').hidden = true; $('#lbImg').src = ''; }
+function closeLb() {
+  $('#lb').hidden = true;
+  $('#lbImg').src = '';
+}
 
 async function download() {
   if (!state.sid || !state.resultRun || !state.sel.size || state.dlBusy || state.sel.size > state.maxExport) return;
-  state.dlBusy = true; updateToolbar();
-  $('#dl').hidden = false; $('#dlBar').style.width = '15%'; $('#dlInfo').textContent = '正在生成 ZIP…';
+  state.dlBusy = true;
+  updateToolbar();
+  $('#dl').hidden = false;
+  $('#dlBar').style.width = '15%';
+  $('#dlInfo').textContent = '正在生成 ZIP…';
   try {
-    const j = await jsonRequest('/api/export/' + state.sid, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({run:state.resultRun, ids:[...state.sel].sort((a,b)=>a-b).join(',')}),
-    }, 0);
-    const a = document.createElement('a'); a.href = j.url; a.download = '';
-    document.body.appendChild(a); a.click(); a.remove();
+    const j = await jsonRequest(
+      '/api/export/' + state.sid,
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({run: state.resultRun, ids: [...state.sel].sort((a, b) => a - b).join(',')}),
+      },
+      0,
+    );
+    const a = document.createElement('a');
+    a.href = j.url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     toast(`已交给浏览器下载 ${j.count} 张图片，请在浏览器下载列表中查看保存结果`);
-  } catch (e) { toast(e.message || '打包失败，请重试', true); }
-  finally { state.dlBusy = false; $('#dl').hidden = true; updateToolbar(); }
+  } catch (e) {
+    toast(e.message || '打包失败，请重试', true);
+  } finally {
+    state.dlBusy = false;
+    $('#dl').hidden = true;
+    updateToolbar();
+  }
 }
 
-const drop = $('#drop'), fileInput = $('#file');
-drop.addEventListener('click', () => {if (!state.busy) fileInput.click();});
-drop.addEventListener('keydown', e => {if (e.key === 'Enter' || e.key === ' ') {e.preventDefault(); if (!state.busy) fileInput.click();}});
-fileInput.addEventListener('change', () => {if (fileInput.files[0]) upload(fileInput.files[0]); fileInput.value = '';});
-['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => {e.preventDefault(); drop.classList.add('over');}));
-['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => {e.preventDefault(); drop.classList.remove('over');}));
-drop.addEventListener('drop', e => {const f = e.dataTransfer?.files?.[0]; if (f) upload(f);});
+const drop = $('#drop'),
+  fileInput = $('#file');
+drop.addEventListener('click', () => {
+  if (!state.busy) fileInput.click();
+});
+drop.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    if (!state.busy) fileInput.click();
+  }
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) upload(fileInput.files[0]);
+  fileInput.value = '';
+});
+['dragover', 'dragenter'].forEach(ev =>
+  drop.addEventListener(ev, e => {
+    e.preventDefault();
+    drop.classList.add('over');
+  }),
+);
+['dragleave', 'drop'].forEach(ev =>
+  drop.addEventListener(ev, e => {
+    e.preventDefault();
+    drop.classList.remove('over');
+  }),
+);
+drop.addEventListener('drop', e => {
+  const f = e.dataTransfer?.files?.[0];
+  if (f) upload(f);
+});
 $('#sens').addEventListener('input', () => {
   state.sens = +$('#sens').value;
-  $('#sensVal').textContent = `${sensName(state.sens)} (${state.sens})`;
-  clearTimeout(sensTimer); sensTimer = setTimeout(analyze, 500);
+  showSens();
+  clearTimeout(sensTimer);
+  sensTimer = setTimeout(analyze, 500);
 });
-$('#chkEnds').addEventListener('change', () => {state.ends = $('#chkEnds').checked; analyze();});
-$('#chkFlash').addEventListener('change', () => {state.flash = $('#chkFlash').checked; analyze();});
-$('#minScene').addEventListener('change', () => {state.minimum = +$('#minScene').value; analyze();});
+SENS_PRESETS.forEach(([id, value]) =>
+  $(id).addEventListener('click', () => {
+    if (state.sens === value) return;
+    state.sens = value;
+    $('#sens').value = value;
+    showSens();
+    analyze();
+  }),
+);
+$('#pick').addEventListener('change', () => {
+  state.pick = $('#pick').value;
+  analyze();
+});
+showSens();
+$('#chkEnds').addEventListener('change', () => {
+  state.ends = $('#chkEnds').checked;
+  analyze();
+});
+$('#chkFlash').addEventListener('change', () => {
+  state.flash = $('#chkFlash').checked;
+  analyze();
+});
+$('#minScene').addEventListener('change', () => {
+  state.minimum = +$('#minScene').value;
+  analyze();
+});
 $('#btnAgain').addEventListener('click', analyze);
 $('#btnRetry').addEventListener('click', () => startPoll(true));
 $('#btnCancel').addEventListener('click', async () => {
@@ -469,51 +752,85 @@ $('#btnCancel').addEventListener('click', async () => {
   clearTimeout(sensTimer);
   state.pendingAnalyze = false;
   $('#btnCancel').disabled = true;
-  try {await jsonRequest('/api/cancel/' + sid, {
-    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({run}),
-  });}
-  catch (e) {toast(e.message || '取消失败，请重试', true);}
-  finally {if (sid === state.sid) startPoll();}
+  try {
+    await jsonRequest('/api/cancel/' + sid, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({run}),
+    });
+  } catch (e) {
+    toast(e.message || '取消失败，请重试', true);
+  } finally {
+    if (sid === state.sid) startPoll();
+  }
 });
 $('#btnAll').addEventListener('click', () => {
   if (state.busy || state.editBusy) return;
-  state.sel = new Set(state.cuts.map((_, i) => i)); rememberSelection();
-  document.querySelectorAll('#grid .item').forEach(el => {el.classList.remove('off'); el.querySelector('.tag').hidden = true; el.querySelector('input').checked = true;});
+  state.sel = new Set(state.cuts.map((_, i) => i));
+  rememberSelection();
+  document.querySelectorAll('#grid .item').forEach(el => {
+    el.classList.remove('off');
+    el.querySelector('.tag').hidden = true;
+    el.querySelector('input').checked = true;
+  });
   updateToolbar();
 });
 $('#btnNone').addEventListener('click', () => {
   if (state.busy || state.editBusy) return;
-  state.sel.clear(); rememberSelection();
-  document.querySelectorAll('#grid .item').forEach(el => {el.classList.add('off'); el.querySelector('.tag').hidden = false; el.querySelector('input').checked = false;});
+  state.sel.clear();
+  rememberSelection();
+  document.querySelectorAll('#grid .item').forEach(el => {
+    el.classList.add('off');
+    el.querySelector('.tag').hidden = false;
+    el.querySelector('input').checked = false;
+  });
   updateToolbar();
 });
 $('#btnDownload').addEventListener('click', download);
 $('#btnPrevFrame').addEventListener('click', () => stepPreview(-1));
 $('#btnNextFrame').addEventListener('click', () => stepPreview(1));
 $('#frameSeek').addEventListener('change', () => {
-  pauseForFrameControl(); requestPreview({frame_index:+$('#frameSeek').value});
+  pauseForFrameControl();
+  requestPreview({frame_index: +$('#frameSeek').value});
 });
 $('#btnSeekTime').addEventListener('click', () => {
   const time = +$('#seekTime').value;
-  if (!Number.isFinite(time) || time < 0) {toast('请输入非负秒数',true); return;}
-  pauseForFrameControl(); requestPreview({time});
+  if (!Number.isFinite(time) || time < 0) {
+    toast('请输入非负秒数', true);
+    return;
+  }
+  pauseForFrameControl();
+  requestPreview({time});
 });
 $('#btnAddFrame').addEventListener('click', () => saveManual('add'));
 $('#btnSaveFrame').addEventListener('click', () => saveManual('move'));
-$('#btnCancelEdit').addEventListener('click', () => {state.editIndex=null; updateEditorControls();});
+$('#btnCancelEdit').addEventListener('click', () => {
+  state.editIndex = null;
+  updateEditorControls();
+});
 $('#videoPlayer').addEventListener('error', () => {
   $('#videoHint').textContent = '浏览器无法播放此格式，仍可输入秒数或使用逐帧时间轴定位并补帧。';
 });
 $('#videoPlayer').addEventListener('timeupdate', () => {
   if (!$('#videoPlayer').paused) $('#seekTime').value = $('#videoPlayer').currentTime.toFixed(3);
 });
-['pause','seeked'].forEach(name => $('#videoPlayer').addEventListener(name, () => {
-  if (name === 'pause' && state.ignorePause) {state.ignorePause = false; return;}
-  if ($('#videoPlayer').paused && state.resultRun && !state.editBusy) requestPreview({time:$('#videoPlayer').currentTime});
-}));
+['pause', 'seeked'].forEach(name =>
+  $('#videoPlayer').addEventListener(name, () => {
+    if (name === 'pause' && state.ignorePause) {
+      state.ignorePause = false;
+      return;
+    }
+    if ($('#videoPlayer').paused && state.resultRun && !state.editBusy)
+      requestPreview({time: $('#videoPlayer').currentTime});
+  }),
+);
 $('#lbClose').addEventListener('click', closeLb);
-$('#lb').addEventListener('click', e => {if (e.target.id === 'lb') closeLb();});
-document.addEventListener('keydown', e => {if (e.key === 'Escape') closeLb();});
+$('#lb').addEventListener('click', e => {
+  if (e.target.id === 'lb') closeLb();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeLb();
+});
 
 async function loadWorkspace() {
   const button = $('#btnWorkspace');
@@ -522,48 +839,90 @@ async function loadWorkspace() {
   try {
     const data = await jsonRequest('/api/workspace');
     $('#workspaceInfo').textContent = `工作目录：${data.path} · 共 ${data.entries.length} 条记录`;
-    const list = $('#workspaceList'); list.innerHTML = ''; list.hidden = false;
-    if (!data.entries.length) {list.textContent = '工作区里还没有可恢复的记录。'; return;}
+    const list = $('#workspaceList');
+    list.innerHTML = '';
+    list.hidden = false;
+    if (!data.entries.length) {
+      list.textContent = '工作区里还没有可恢复的记录。';
+      return;
+    }
     data.entries.forEach(entry => {
-      const row = document.createElement('div'); row.className = 'toolbar';
-      const info = document.createElement('div'); info.className = 'info';
-      info.textContent = `${entry.video_name || entry.session_id} · ${entry.frame_count || 0} 张` +
-        (entry.legacy ? ' · 旧版记录' : '') + (entry.note ? ' · ' + entry.note : '');
-      const open = document.createElement('button'); open.className = 'btn small';
-      open.textContent = '恢复记录'; open.disabled = entry.can_restore === false;
+      const row = document.createElement('div');
+      row.className = 'toolbar';
+      const info = document.createElement('div');
+      info.className = 'info';
+      info.textContent =
+        `${entry.video_name || entry.session_id} · ${entry.frame_count || 0} 张` +
+        (entry.legacy ? ' · 旧版记录' : '') +
+        (entry.note ? ' · ' + entry.note : '');
+      const open = document.createElement('button');
+      open.className = 'btn small';
+      open.textContent = '恢复记录';
+      open.disabled = entry.can_restore === false;
       open.addEventListener('click', () => restoreWorkspace(entry.session_id));
-      row.append(info,open); list.appendChild(row);
+      row.append(info, open);
+      list.appendChild(row);
     });
   } catch (e) {
     $('#workspaceInfo').textContent = '读取失败：' + (e.message || '请确认工具已启动');
-  } finally {button.disabled = false;}
+  } finally {
+    button.disabled = false;
+  }
 }
 async function restoreWorkspace(sid) {
-  if (state.busy || state.editBusy || state.analyzing) {toast('请等待当前操作完成后再恢复记录'); return;}
-  setUploadBusy(true); stopPoll(); clearTimeout(sensTimer);
-  state.requestRevision++; state.pendingAnalyze = false;
+  if (state.busy || state.editBusy || state.analyzing) {
+    toast('请等待当前操作完成后再恢复记录');
+    return;
+  }
+  setUploadBusy(true);
+  stopPoll();
+  clearTimeout(sensTimer);
+  state.requestRevision++;
+  state.pendingAnalyze = false;
   try {
     if (state.selectionChain) await state.selectionChain;
-    const j = await jsonRequest('/api/workspace/' + encodeURIComponent(sid) + '/restore', {method:'POST'}, 0);
-    pauseForFrameControl(); closeLb();
-    state.sid = sid; state.run = j.run; state.resultRun = null;
-    state.previewToken++; state.previewFrame = null; state.previewReady = false; state.previewLoading = false;
-    state.editIndex = null; state.videoSid = null; state.totalFrames = 0;
-    state.cuts = []; state.sel.clear();
+    const j = await jsonRequest('/api/workspace/' + encodeURIComponent(sid) + '/restore', {method: 'POST'}, 0);
+    pauseForFrameControl();
+    closeLb();
+    state.sid = sid;
+    state.run = j.run;
+    state.resultRun = null;
+    state.previewToken++;
+    state.previewFrame = null;
+    state.previewReady = false;
+    state.previewLoading = false;
+    state.editIndex = null;
+    state.videoSid = null;
+    state.totalFrames = 0;
+    state.cuts = [];
+    state.sel.clear();
     state.jobRunning = j.status === 'running';
-    $('#exactFrame').hidden = true; $('#cardEditor').hidden = true; $('#cardResult').hidden = true;
+    $('#exactFrame').hidden = true;
+    $('#cardEditor').hidden = true;
+    $('#cardResult').hidden = true;
     $('#cardProgress').hidden = true;
-    try {sessionStorage.setItem('kf_sid',sid);} catch { /* 仍可依靠工作区恢复 */ }
-    if (Array.isArray(j.excluded)) saveStorage('kf_skipped_' + sid,j.excluded);
-    syncInfo(j,true);
-    if (j.result) render(j.result,false);
+    try {
+      sessionStorage.setItem('kf_sid', sid);
+    } catch {
+      /* 仍可依靠工作区恢复 */
+    }
+    if (Array.isArray(j.excluded)) saveStorage('kf_skipped_' + sid, j.excluded);
+    syncInfo(j, true);
+    if (j.result) render(j.result, false);
     if (state.jobRunning) startPoll();
     toast(j.result ? '已恢复本地工作区记录' : '已恢复视频，点击“重新分析”继续');
   } catch (e) {
-    toast(e.message || '恢复失败，原记录未修改',true);
+    toast(e.message || '恢复失败，原记录未修改', true);
     if (state.sid) startPoll(true);
-  } finally {setUploadBusy(false); updateEditorControls();}
+  } finally {
+    setUploadBusy(false);
+    updateEditorControls();
+  }
 }
-$('#btnWorkspace').addEventListener('click',loadWorkspace);
-try { state.sid = sessionStorage.getItem('kf_sid'); } catch { /* 可在无存储模式运行 */ }
+$('#btnWorkspace').addEventListener('click', loadWorkspace);
+try {
+  state.sid = sessionStorage.getItem('kf_sid');
+} catch {
+  /* 可在无存储模式运行 */
+}
 if (state.sid) startPoll(true);

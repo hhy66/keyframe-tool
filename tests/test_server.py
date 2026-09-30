@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 from starlette.responses import FileResponse
 
+import detection
 import server
 import storage_manager
 
@@ -56,9 +57,13 @@ class VideoTests(unittest.TestCase):
         return path
 
     def register(self, path, sid="sample"):
-        server._sessions[sid] = {"video_path": path, "video_name": path.name,
-                                 "meta": server.probe(path), "cache": {},
-                                 "worker_lock": threading.Lock()}
+        server._sessions[sid] = {
+            "video_path": path,
+            "video_name": path.name,
+            "meta": server.probe(path),
+            "cache": {},
+            "worker_lock": threading.Lock(),
+        }
         return sid
 
     def analyze(self, sid, **params):
@@ -94,12 +99,10 @@ class VideoTests(unittest.TestCase):
         self.assertEqual(self.cut_frames([20] * 32 + [255] + [20] * 27), [])
 
     def test_short_shot_between_old_sample_points(self):
-        self.assertEqual(self.cut_frames([20] * 29 + [210] * 2 + [20] * 29,
-                                         min_scene_seconds=0), [29, 31])
+        self.assertEqual(self.cut_frames([20] * 29 + [210] * 2 + [20] * 29, min_scene_seconds=0), [29, 31])
 
     def test_min_scene_interval_is_configurable(self):
-        self.assertEqual(self.cut_frames([20] * 30 + [210] * 6 + [20] * 24,
-                                         min_scene_seconds=0.4), [30])
+        self.assertEqual(self.cut_frames([20] * 30 + [210] * 6 + [20] * 24, min_scene_seconds=0.4), [30])
 
     def test_two_frame_video_can_export_ends(self):
         sid = self.register(self.video([30, 30]))
@@ -132,9 +135,11 @@ class VideoTests(unittest.TestCase):
     def test_delayed_workers_do_not_run_latest_job_twice(self):
         sid = self.normal()
         queue = []
+
         class DeferredThread(ImmediateThread):
             def start(self):
                 queue.append((self.target, self.args))
+
         with patch.object(server.threading, "Thread", DeferredThread):
             server.analyze({"session_id": sid, "sensitivity": 10})
             old = server._jobs[sid]
@@ -149,7 +154,7 @@ class VideoTests(unittest.TestCase):
     def test_failed_reanalysis_preserves_last_good_result(self):
         sid = self.normal()
         old = self.analyze(sid, include_ends=True)
-        with patch.object(server, "_grab_frame_at", return_value=None):
+        with patch.object(detection, "_grab_frame_at", return_value=None):
             failed = self.analyze(sid, include_ends=True)
         self.assertEqual(failed["status"], "error")
         self.assertEqual(failed["result"], old["result"])
@@ -186,7 +191,7 @@ class VideoTests(unittest.TestCase):
     def test_truncated_video_does_not_publish_incomplete_results(self):
         path = self.video([20] * 30 + [210] * 30)
         data = path.read_bytes()
-        path.write_bytes(data[:len(data) * 3 // 4])
+        path.write_bytes(data[: len(data) * 3 // 4])
         sid = self.register(path)
         self.assertEqual(server._sessions[sid]["meta"]["frames"], 60)
         job = self.analyze(sid, include_ends=True)
@@ -194,16 +199,19 @@ class VideoTests(unittest.TestCase):
         self.assertIsNone(job["result"])
 
     def test_disable_flash_suppression_keeps_single_frame_shot(self):
-        self.assertEqual(self.cut_frames([20] * 32 + [255] + [20] * 27,
-                                         suppress_flash=False, min_scene_seconds=0), [32, 33])
+        self.assertEqual(
+            self.cut_frames([20] * 32 + [255] + [20] * 27, suppress_flash=False, min_scene_seconds=0), [32, 33]
+        )
 
     def test_cancelled_job_preserves_result(self):
         sid = self.normal()
         old = self.analyze(sid, include_ends=True)
         queue = []
+
         class DeferredThread(ImmediateThread):
             def start(self):
                 queue.append((self.target, self.args))
+
         with patch.object(server.threading, "Thread", DeferredThread):
             server.analyze({"session_id": sid, "sensitivity": 90})
         job = server._jobs[sid]
@@ -228,17 +236,23 @@ class VideoTests(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         threads = []
         real_thread, small_color = threading.Thread, server._small_color
+
         def make_thread(*args, **kwargs):
             thread = real_thread(*args, **kwargs)
             threads.append(thread)
             return thread
+
         def blocked_color(frame):
             entered.set()
             if not release.wait(3):
                 raise RuntimeError("test synchronization timeout")
             return small_color(frame)
+
         try:
-            with patch.object(server.threading, "Thread", make_thread), patch.object(server, "_small_color", blocked_color):
+            with (
+                patch.object(server.threading, "Thread", make_thread),
+                patch.object(detection, "_small_color", blocked_color),
+            ):
                 server.analyze({"session_id": sid})
                 self.assertTrue(entered.wait(3))
                 job = server._jobs[sid]
@@ -259,19 +273,21 @@ class VideoTests(unittest.TestCase):
         refs, maximum = [], [0]
         # Track arrays returned by resize without retaining the arrays ourselves.
         original = cv2.resize
+
         def track(*args, **kwargs):
             image = original(*args, **kwargs)
             refs.append(weakref.ref(image))
             maximum[0] = max(maximum[0], sum(r() is not None for r in refs))
             return image
+
         with patch.object(server.cv2, "resize", side_effect=track):
             server._scan_pass1(str(path), {}, {})
         self.assertLessEqual(maximum[0], 5)
 
-
     def edit(self, sid, action, frame_index, **extra):
-        return server.edit(sid, {"base_run": server._jobs[sid]["result"]["run"],
-                                 "action": action, "frame_index": frame_index, **extra})
+        return server.edit(
+            sid, {"base_run": server._jobs[sid]["result"]["run"], "action": action, "frame_index": frame_index, **extra}
+        )
 
     def test_manual_preview_time_mapping_and_pixels(self):
         sid = self.normal()
@@ -331,18 +347,21 @@ class VideoTests(unittest.TestCase):
         old = self.analyze(sid, include_ends=True)["result"]
         original = server._write_jpeg
         started = []
+
         def start_analysis(*args):
             if not started:
                 started.append(True)
                 with patch.object(server.threading, "Thread"):
                     server.analyze({"session_id": sid})
             original(*args)
+
         with patch.object(server, "_write_jpeg", side_effect=start_analysis):
             with self.assertRaises(HTTPException) as conflict:
                 self.edit(sid, "add", 12)
         self.assertEqual(conflict.exception.status_code, 409)
         self.assertIs(server._jobs[sid]["result"], old)
         self.assertFalse(server._sessions[sid].get("manual_additions"))
+
 
 if __name__ == "__main__":
     unittest.main()

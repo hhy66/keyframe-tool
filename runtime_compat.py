@@ -1,4 +1,5 @@
 """Windows Proactor socket-cleanup compatibility without hiding application errors."""
+
 import asyncio
 from contextlib import asynccontextmanager
 import logging
@@ -10,20 +11,24 @@ def _finish_reset_cleanup(context):
     handle = context.get('handle')
     callback = getattr(handle, '_callback', None)
     transport = getattr(callback, '__self__', None)
-    if not (isinstance(error, ConnectionResetError)
-            and getattr(error, 'winerror', None) == 10054
-            and getattr(callback, '__module__', '') == 'asyncio.proactor_events'
-            and getattr(callback, '__name__', '') == '_call_connection_lost'
-            and transport is not None
-            and not getattr(transport, '_called_connection_lost', False)
-            and getattr(transport, '_sock', None) is not None):
+    if not (
+        isinstance(error, ConnectionResetError)
+        and getattr(error, 'winerror', None) == 10054
+        and getattr(callback, '__module__', '') == 'asyncio.proactor_events'
+        and getattr(callback, '__name__', '') == '_call_connection_lost'
+        and transport is not None
+        and not getattr(transport, '_called_connection_lost', False)
+        and getattr(transport, '_sock', None) is not None
+    ):
         return False
     # Confirm the exception came from the cleanup callback, not another caller.
     traceback = error.__traceback__
     matched = False
     while traceback:
-        if (traceback.tb_frame.f_code.co_name == '_call_connection_lost'
-                and traceback.tb_frame.f_locals.get('self') is transport):
+        if (
+            traceback.tb_frame.f_code.co_name == '_call_connection_lost'
+            and traceback.tb_frame.f_locals.get('self') is transport
+        ):
             matched = True
         traceback = traceback.tb_next
     if not matched:
@@ -48,6 +53,7 @@ def _finish_reset_cleanup(context):
 async def lifespan(app):
     loop = asyncio.get_running_loop()
     previous = loop.get_exception_handler()
+
     def handler(active_loop, context):
         try:
             if _finish_reset_cleanup(context):
@@ -60,6 +66,7 @@ async def lifespan(app):
             previous(active_loop, context)
         else:
             active_loop.default_exception_handler(context)
+
     installed = sys.platform == 'win32'
     if installed:
         loop.set_exception_handler(handler)
