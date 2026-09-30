@@ -332,60 +332,109 @@
 <script src="/storage.js"></script>
 <div id="collagePanel" class="collageOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="collageTitle">
   <div class="collageEditor">
-    <div class="collageHeader"><div><h2 id="collageTitle">制作参考拼图</h2><p id="collageSource"></p></div><button class="btn ghost" id="collageClose">关闭拼图</button></div>
-    <div class="collageBody">
-      <aside class="collageSidebar">
-        <h3>1. 选择参考图</h3><p class="hint">这里的选择独立，不改变关键帧下载勾选。草稿保留在当前页面，刷新后需重新选择。</p>
-        <div class="editorControls"><button class="btn ghost small" id="collageSelectAll">全部加入</button><button class="btn ghost small" id="collageClear">清空拼图选图</button><button class="btn ghost small" id="collageImportSelection">带入下载勾选</button></div>
-        <div id="collagePicker" class="collagePicker"></div>
-        <h3>2. 调整顺序</h3><p class="hint">拖动图片排序，也可用上移／下移按钮。拼图从左到右、从上到下排列。</p>
-        <div id="collageOrder" class="collageOrder"></div>
-      </aside>
-      <div class="collageMain">
-        <h3>3. 排版与输出</h3>
-        <div class="collageOptions">
-          <label>输出模式<select id="collageMode"><option value="share">适合分享（宽 3000 像素）</option><option value="custom">自定义宽度</option><option value="original">保留原图细节（不缩放）</option></select></label>
-          <label>排版方式<select id="collageLayout"><option value="justified">智能排版（按画面比例自动分行）</option><option value="grid">固定网格</option></select></label>
-          <label>每张拼图最多<select id="collageGrid"><option value="3">9 张（网格为 3 × 3）</option><option value="2">4 张（网格为 2 × 2）</option></select></label>
-          <label id="collageCanvasField">整体形状<select id="collageCanvas"><option value="auto">跟随画面比例</option><option value="landscape">偏横向 16:9</option><option value="square">接近正方形 1:1</option><option value="portrait">偏竖向 3:4</option></select></label>
-          <label id="collageShapeField">格子比例<select id="collageShape"><option value="source">跟随原图比例</option><option value="landscape">横向 16:9</option><option value="square">正方形 1:1</option><option value="portrait">竖向 9:16</option></select></label>
-          <label id="collageFitField">画面填充<select id="collageFit"><option value="cover">裁剪铺满（可调整裁剪位置）</option><option value="contain">完整显示（格内留白）</option></select></label>
-          <label>自定义整图宽度（像素）<input id="collageWidth" type="number" min="128" max="12000" step="1" value="3000"></label>
-          <label>下载格式<select id="collageFormat"><option value="png">PNG</option><option value="jpeg">JPEG（质量 95%）</option></select></label>
-        </div>
-        <p id="collageModeNote" class="hint"></p>
-        <h3>4. 样式</h3>
-        <div class="collageOptions">
-          <label>样式预设<select id="collagePreset"><option value="card">浅灰卡片（间距 + 圆角 + 阴影）</option><option value="white">白底细边</option><option value="gallery">深色画廊</option><option value="clean">无缝紧凑</option><option value="custom">自定义</option></select></label>
-          <label>间距<select id="collageGap"><option value="none">无</option><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label>
-          <label>圆角<select id="collageRadius"><option value="none">无</option><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label>
-          <label>底色<select id="collageBackground"><option value="white">白色</option><option value="light">浅灰</option><option value="dark">深灰</option><option value="black">黑色</option></select></label>
-          <label class="collageWide">标题（可选）<input id="collageTitleText" type="text" maxlength="40" placeholder="例如：视频名称 / 镜头参考"></label>
-        </div>
-        <div class="collageChecks">
-          <label><input type="checkbox" id="collageShadow"> 图片阴影</label>
-          <label><input type="checkbox" id="collageIndex"> 显示原截图序号</label>
-          <label><input type="checkbox" id="collageTime"> 显示时间码</label>
-          <label><input type="checkbox" id="collageSplit"> 超出张数时分成多张拼图</label>
-        </div>
-        <p id="collageSummary" class="collageNotice" role="status" aria-live="polite"></p>
-        <div class="editorControls"><button class="btn ghost small" id="collagePrev">上一张拼图</button><span id="collagePage"></span><button class="btn ghost small" id="collageNext">下一张拼图</button></div>
-        <p id="collageDimensions" class="hint"></p>
-        <h3>交互排版预览</h3>
-        <p class="hint">拖动画面到另一张上可交换位置；单击选中，双击打开裁剪。预览为缩略图近似效果，以下方实际成品为准。</p>
-        <div class="editorControls"><button class="btn ghost small" id="collageCropSelected" disabled>裁剪所选画面</button><button class="btn ghost small" id="collageResetCrop" disabled>还原所选画面</button></div>
-        <div id="collageStage" class="collageStage"></div>
-        <h3>实际成品</h3>
-        <div id="collagePreview" class="collagePreview">点击“生成成品”后，显示实际导出文件的预览。</div>
-        <p id="collageStatus" role="status" aria-live="polite"></p>
-        <div class="editorControls"><button class="btn" id="collageRender">生成成品</button><button class="btn ghost small" id="collageFitView" disabled>适应窗口</button><button class="btn ghost small" id="collageActual" disabled>100% 查看成品</button><a class="btn ghost" id="collageDownload" role="button" aria-disabled="true">下载当前拼图</a></div>
-        <p class="hint">使用原图在本机生成。“保留原图细节”的 PNG 保留解码后的原图像素；分享模式会缩放。多张拼图逐张生成下载。</p>
+    <div class="collageHeader">
+      <div class="collageHeading"><h2 id="collageTitle">制作参考拼图</h2><p id="collageSource"></p></div>
+      <div class="collageHeaderActions">
+        <button class="btn ghost small" id="collageCsv" title="按拼图顺序导出时间码与备注，可用 Excel 打开">导出分镜表 CSV</button>
+        <button class="btn ghost small" id="collageDownloadAll" title="逐张生成所有拼图，连同分镜表打包下载">下载全部拼图 (zip)</button>
+        <button class="btn small" id="collageClose">关闭</button>
       </div>
     </div>
+    <a id="collageBatchLink" hidden download></a>
+    <div class="collageBody">
+      <aside class="collageSidebar">
+        <section>
+          <h3>1. 选择参考图</h3>
+          <div class="editorControls"><button class="btn ghost small" id="collageSelectAll">全部加入</button><button class="btn ghost small" id="collageClear">清空</button><button class="btn ghost small" id="collageImportSelection">带入下载勾选</button></div>
+          <div id="collagePicker" class="collagePicker"></div>
+          <p class="hint">这里的选择独立，不改变关键帧下载勾选。</p>
+        </section>
+        <section>
+          <h3>2. 顺序与备注</h3>
+          <p class="hint">拖动排序或用按钮调整；备注会显示在图片下方，并写入分镜表。</p>
+          <div id="collageOrder" class="collageOrder"></div>
+        </section>
+      </aside>
+
+      <section class="collageMain" aria-label="拼图预览">
+        <div class="collagePreviewBar">
+          <div class="collagePager"><button class="btn ghost small" id="collagePrev" aria-label="上一张拼图">‹</button><span id="collagePage"></span><button class="btn ghost small" id="collageNext" aria-label="下一张拼图">›</button></div>
+          <p id="collageDimensions"></p>
+        </div>
+        <div id="collageStage" class="collageStage"></div>
+        <div id="collageFocusBar" class="collageFocusBar" hidden>
+          <span id="collageFocusName"></span>
+          <button class="btn ghost small" id="collageCropSelected">裁剪</button>
+          <button class="btn ghost small" id="collageResetCrop">还原完整画面</button>
+          <input id="collageFocusNote" type="text" maxlength="60" placeholder="给这张图写备注（可选）" aria-label="所选图片的备注">
+        </div>
+        <p id="collageSummary" class="collageNotice" role="status" aria-live="polite"></p>
+        <p id="collageStatus" role="status" aria-live="polite"></p>
+        <div class="collageActions">
+          <button class="btn" id="collageRender">生成成品并查看</button>
+          <button class="btn ghost" id="collageShowResult" disabled>查看上次成品</button>
+        </div>
+        <p class="hint">拖动画面到另一张上交换位置；单击选中，双击裁剪。预览为近似效果，以成品为准。</p>
+      </section>
+
+      <aside class="collageSettings" aria-label="拼图设置">
+        <details open>
+          <summary>排版</summary>
+          <label>输出<select id="collageMode"><option value="share">适合分享（宽 3000 像素）</option><option value="custom">自定义宽度</option><option value="original">保留原图细节（不缩放）</option></select></label>
+          <label id="collageWidthField">整图宽度（像素）<input id="collageWidth" type="number" min="128" max="12000" step="1" value="3000"></label>
+          <label>排版方式<select id="collageLayout"><option value="justified">智能排版（按画面比例自动分行）</option><option value="grid">固定网格</option></select></label>
+          <label>每张最多<select id="collagePerPage"><option value="4">4 张（2 列）</option><option value="9">9 张（3 列）</option><option value="12">12 张（4 列）</option><option value="16">16 张（4 列）</option></select></label>
+          <label id="collageCanvasField">整体形状<select id="collageCanvas"><option value="auto">跟随画面比例</option><option value="landscape">偏横向 16:9</option><option value="square">接近正方形 1:1</option><option value="portrait">偏竖向 3:4</option></select></label>
+          <label id="collageShapeField">格子比例<select id="collageShape"><option value="source">跟随原图比例</option><option value="landscape">横向 16:9</option><option value="square">正方形 1:1</option><option value="portrait">竖向 9:16</option></select></label>
+          <label id="collageFitField">画面填充<select id="collageFit"><option value="cover">裁剪铺满（可调整位置）</option><option value="contain">完整显示（格内留白）</option></select></label>
+          <label>下载格式<select id="collageFormat"><option value="png">PNG（无损）</option><option value="jpeg">JPEG（质量 95%，文件更小）</option></select></label>
+          <label class="collageCheck"><input type="checkbox" id="collageSplit"> 超出张数时自动分成多张</label>
+          <p id="collageModeNote" class="hint"></p>
+        </details>
+        <details open>
+          <summary>样式</summary>
+          <label>样式预设<select id="collagePreset"><option value="card">浅灰卡片（间距 + 圆角 + 阴影）</option><option value="white">白底细边</option><option value="gallery">深色画廊</option><option value="clean">无缝紧凑</option><option value="custom">自定义</option></select></label>
+          <div class="collagePair">
+            <label>间距<select id="collageGap"><option value="none">无</option><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label>
+            <label>圆角<select id="collageRadius"><option value="none">无</option><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label>
+          </div>
+          <p id="collageRadiusNote" class="hint" hidden>没有间距时不加圆角，避免拼缝处露出底色。</p>
+          <label>底色<select id="collageBackground"><option value="white">白色</option><option value="light">浅灰</option><option value="dark">深灰</option><option value="black">黑色</option></select></label>
+          <label class="collageCheck"><input type="checkbox" id="collageShadow"> 图片阴影</label>
+          <label>标题（可选）<input id="collageTitleText" type="text" maxlength="40" placeholder="例如：视频名称 / 镜头参考"></label>
+        </details>
+        <details open>
+          <summary>标注</summary>
+          <div class="collageChecks">
+            <label class="collageCheck"><input type="checkbox" id="collageOrderLabel"> 拼图内序号</label>
+            <label class="collageCheck"><input type="checkbox" id="collageIndex"> 原截图编号</label>
+            <label class="collageCheck"><input type="checkbox" id="collageTime"> 时间码</label>
+          </div>
+          <label>标注位置<select id="collageLabelPosition"><option value="tr">画面右上角</option><option value="tl">画面左上角</option><option value="br">画面右下角</option><option value="bl">画面左下角</option><option value="below">图片下方（不遮挡画面）</option></select></label>
+          <p class="hint">视频自带字幕多在下方，标注默认放右上角。备注总是显示在图片下方。</p>
+        </details>
+      </aside>
+    </div>
   </div>
-  <div id="cropDialog" class="cropOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="cropTitle">
-    <div class="cropBox">
-      <div class="cropHead"><h3 id="cropTitle">裁剪原图</h3><span class="hint">只影响拼图，不修改原截图文件</span></div>
+
+  <div id="collageResult" class="collageModal" hidden role="dialog" aria-modal="true" aria-labelledby="collageResultTitle">
+    <div class="collageModalBox">
+      <div class="collageModalHead">
+        <h3 id="collageResultTitle">成品预览</h3>
+        <span id="collageResultInfo" class="hint"></span>
+        <span class="cropSpacer"></span>
+        <button class="btn ghost small" id="collageFitView" disabled>适应窗口</button>
+        <button class="btn ghost small" id="collageActual" disabled>100% 查看</button>
+        <a class="btn small" id="collageDownload" role="button" aria-disabled="true">下载这张</a>
+        <button class="btn ghost small" id="collageResultClose">关闭</button>
+      </div>
+      <div id="collagePreview" class="collagePreview"></div>
+    </div>
+  </div>
+
+  <div id="cropDialog" class="collageModal" hidden role="dialog" aria-modal="true" aria-labelledby="cropTitle">
+    <div class="collageModalBox">
+      <div class="collageModalHead"><h3 id="cropTitle">裁剪原图</h3><span class="hint">只影响拼图，不修改原截图文件</span></div>
       <div id="cropRatios" class="editorControls"></div>
       <div class="cropArea"><img id="cropImage" alt="待裁剪的原图"></div>
       <p id="cropInfo" class="hint"></p>

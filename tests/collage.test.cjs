@@ -27,8 +27,9 @@ test('independent selection starts in justified share mode with the card preset'
   assert.equal(a.$('#collageCanvasField').hidden,false);assert.equal(a.$('#collageFitField').hidden,true);
 });
 test('overflow never silently discards photos and partial page never duplicates',()=>{
-  const a=boot();assert.throws(()=>a.run('CollageUI.pages([0,1,2,3,4],2,false)'),/超过/);
-  assert.equal(a.run('JSON.stringify(CollageUI.pages([0,1,2,3,4],2,true))'),'[[0,1,2,3],[4]]');
+  const a=boot();assert.throws(()=>a.run('CollageUI.pages([0,1,2,3,4],4,false)'),/超过/);
+  assert.equal(a.run('JSON.stringify(CollageUI.pages([0,1,2,3,4],4,true))'),'[[0,1,2,3],[4]]');
+  assert.throws(()=>a.run('CollageUI.pages([0],5,true)'),/4、9、12 或 16/);
 });
 test('moving and direct swapping retain independent order',()=>{
   const a=boot();a.run('CollageUI.open();CollageUI.toggle(1);CollageUI.move(1,0);CollageUI.swap(1,2)');
@@ -69,7 +70,7 @@ test('obsolete render response is cleaned rather than replacing current state',a
 });
 test('multi-page request sends only the final page photo and correct page number',async()=>{
   const a=boot();a.state.cuts=Array.from({length:9},(_,i)=>({label:`t${i}`}));a.state.frames=Array(9).fill('frame');a.state.thumbs=Array(9).fill('thumb');a.state.sel=new Set([0,1,2,3,4,5,6,7,8]);
-  a.run('CollageUI.open()');a.$('#collageGrid').value='2';a.$('#collageSplit').checked=true;a.run('CollageUI.page=2');await a.run('CollageUI.generate()');
+  a.run('CollageUI.open()');a.$('#collagePerPage').value='4';a.$('#collageSplit').checked=true;a.run('CollageUI.page=2');await a.run('CollageUI.generate()');
   const call=a.calls.find(c=>c.url.endsWith('/render'));const data=JSON.parse(call.options.body);
   assert.deepEqual(data.ids,[8]);assert.equal(data.page,3);assert.equal(a.state.sel.size,9);
 });
@@ -108,4 +109,43 @@ test('grid cover locks the cropper to the cell ratio; original mode refuses to c
   await a.run('CollageUI.openCrop(0)');assert.equal(a.run('lastOptions.aspectRatio'),1.5);
   a.run('CollageUI.closeCrop();lastOptions=null');a.$('#collageMode').value='original';
   await a.run('CollageUI.openCrop(0)');assert.equal(a.run('lastOptions'),null);assert.equal(a.$('#cropDialog').hidden,true);
+});
+test('settings are remembered, invalid saved values fall back to defaults',()=>{
+  const store={};const a=boot();
+  a.context.window={localStorage:{getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;}}};
+  a.run('CollageUI.open()');
+  assert.equal(a.$('#collageLabelPosition').value,'tr');assert.equal(a.$('#collagePerPage').value,'9');
+  a.$('#collagePerPage').value='16';a.$('#collageLabelPosition').value='below';a.run("CollageUI.settingChanged('#collagePerPage')");
+  const saved=JSON.parse(store['keyframe-tool.collage.settings.v1']);assert.equal(saved['#collagePerPage'],'16');
+  saved['#collageMode']='bogus';store['keyframe-tool.collage.settings.v1']=JSON.stringify(saved);
+  a.run('CollageUI.snapshot=null;CollageUI.open()');
+  assert.equal(a.$('#collagePerPage').value,'16');assert.equal(a.$('#collageLabelPosition').value,'below');assert.equal(a.$('#collageMode').value,'share');
+  const p=a.run('CollageUI.payload()');assert.equal(p.per_page,16);assert.equal(p.label_position,'below');
+});
+test('notes are trimmed into the payload, filtered per page and kept per result',()=>{
+  const store={};const a=boot();
+  a.context.window={localStorage:{getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;}}};
+  a.run('CollageUI.open()');
+  a.run("CollageUI.setNote(0,'  航拍  ');CollageUI.setNote(2,'   ')");
+  let p=a.run('CollageUI.payload()');assert.equal(JSON.stringify(p.notes),JSON.stringify({0:'航拍'}));
+  assert.equal(JSON.parse(store['keyframe-tool.collage.notes.one.run'])[0],'  航拍  ');
+  a.run('CollageUI.snapshot=null;CollageUI.notes={};CollageUI.open()');assert.equal(a.run('CollageUI.notes[0]'),'  航拍  ');
+  a.$('#collageMode').value='original';p=a.run('CollageUI.payload()');assert.equal(JSON.stringify(p.notes),'{}');
+});
+test('rounded corners are disabled with no gap and the reason is shown',()=>{
+  const a=boot();a.run('CollageUI.open()');
+  a.$('#collageGap').value='none';a.run("CollageUI.settingChanged('#collageGap')");
+  assert.equal(a.$('#collageRadius').disabled,true);assert.equal(a.$('#collageRadiusNote').hidden,false);
+  assert.equal(a.$('#collagePreset').value,'custom');
+});
+test('download all sends every selected photo once and hands the zip to the browser',async()=>{
+  const a=boot((url)=>url.endsWith('/render-all')?{token:'z',pages:2,bytes:2048,download_url:'/zip/download'}:{});
+  a.state.cuts=Array.from({length:6},(_,i)=>({label:`t${i}`}));a.state.frames=Array(6).fill('frame');a.state.thumbs=Array(6).fill('thumb');a.state.sel=new Set([5,1,3,0,2,4]);
+  a.run('CollageUI.open()');a.$('#collagePerPage').value='4';a.$('#collageSplit').checked=false;a.run("CollageUI.setNote(4,'结尾')");
+  let clicked=0;a.$('#collageBatchLink').click=()=>{clicked++;};
+  await a.run('CollageUI.downloadAll()');
+  const call=a.calls.find(c=>c.url.endsWith('/render-all'));const body=JSON.parse(call.options.body);
+  assert.deepEqual(body.ids,[0,1,2,3,4,5]);assert.equal(body.per_page,4);assert.equal(body.notes['4'],'结尾');
+  assert.equal(a.$('#collageBatchLink').href,'/zip/download');assert.equal(clicked,1);
+  assert.match(a.$('#collageStatus').textContent,/2 张拼图/);assert.equal(a.run('CollageUI.busy'),false);
 });
