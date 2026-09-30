@@ -52,6 +52,15 @@
   #sensVal{font-weight:700; color:var(--accent)}
   .check{display:flex; align-items:center; gap:8px; font-size:14px; cursor:pointer; user-select:none}
   .check input{width:16px; height:16px; accent-color:var(--accent)}
+  .seg{display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden}
+  .seg button{border:0; background:#fff; padding:8px 20px; font-size:14px; cursor:pointer; color:var(--text); border-right:1px solid var(--line)}
+  .seg button:last-child{border-right:0}
+  .seg button.active{background:var(--accent); color:#fff; font-weight:600}
+  .seg button:disabled{cursor:not-allowed; opacity:.6}
+  .paramSelect{padding:8px 6px; border:1px solid var(--line); border-radius:8px; font-size:14px; min-width:260px; background:#fff}
+  details.advanced{margin-top:14px; border-top:1px dashed var(--line); padding-top:10px}
+  details.advanced summary{cursor:pointer; font-size:13.5px; color:var(--muted)}
+  details.advanced .row{margin-top:12px}
   .btn{
     border:0; border-radius:9px; padding:9px 16px; font-size:14px; cursor:pointer;
     background:var(--accent); color:#fff; transition:.15s; font-weight:600;
@@ -187,20 +196,42 @@
     <h2><span class="n">2</span>检测参数</h2>
     <div class="row">
       <div class="field">
-        <label for="sens">灵敏度：<span id="sensVal">适中 (50)</span>
-          <span style="float:right; color:#9aa0b5">左=保守（帧少） · 右=敏感（帧多）</span></label>
-        <input type="range" id="sens" min="0" max="100" value="50">
+        <label>截到的镜头数量</label>
+        <div class="seg" role="group" aria-label="截到的镜头数量">
+          <button type="button" id="sensFew" title="只截明显的切换，大动作不容易误判">少</button>
+          <button type="button" id="sensMid">适中</button>
+          <button type="button" id="sensMany" title="尽量不漏切换，可能多出相似画面">多</button>
+        </div>
       </div>
-      <label class="check">
-        <input type="checkbox" id="chkEnds"> 同时保留视频首帧与末帧
-      </label>
-      <label class="check"><input type="checkbox" id="chkFlash" checked> 抑制单帧闪光</label>
-      <div><label for="minScene">最小镜头间隔（秒）</label>
-        <input type="number" id="minScene" min="0" max="10" step="0.05" value="0.1" style="width:90px;padding:6px">
+      <div class="field">
+        <label for="pick">每个镜头截取哪一帧</label>
+        <select id="pick" class="paramSelect">
+          <option value="first">切换后第一帧（时间最准）</option>
+          <option value="settle">切换后约 0.5 秒（避开转场残影）</option>
+          <option value="sharp">镜头开头最清晰的一帧（1.5 秒内）</option>
+        </select>
       </div>
       <button class="btn ghost small" id="btnAgain">重新分析</button>
     </div>
-    <div class="hint">参数修改后自动分析，已完成的扫描会复用。密集剪辑可减小最小间隔；需要单帧镜头时关闭闪光抑制。</div>
+    <details class="advanced">
+      <summary>高级参数</summary>
+      <div class="row">
+        <div class="field">
+          <label for="sens">灵敏度：<span id="sensVal">适中 (50)</span>
+            <span style="float:right; color:#9aa0b5">左=保守（帧少） · 右=敏感（帧多）</span></label>
+          <input type="range" id="sens" min="0" max="100" value="50">
+        </div>
+        <label class="check">
+          <input type="checkbox" id="chkEnds"> 同时保留视频首帧与末帧
+        </label>
+        <label class="check"><input type="checkbox" id="chkFlash" checked> 抑制单帧闪光</label>
+        <div><label for="minScene">最小镜头间隔（秒）</label>
+          <input type="number" id="minScene" min="0" max="10" step="0.05" value="0.1" style="width:90px;padding:6px">
+        </div>
+      </div>
+      <div class="hint">密集剪辑可减小最小间隔；需要单帧镜头时关闭闪光抑制。</div>
+    </details>
+    <div class="hint">参数修改后自动重新分析，已完成的扫描会复用。截图不理想时，可在结果里单张“逐帧微调”。</div>
   </section>
 
   <!-- 3. 进度 -->

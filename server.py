@@ -127,6 +127,39 @@ def _grab_frame_at(cap, target_frame):
     return frame if ok else None
 
 
+PICKS = ("first", "settle", "sharp")
+SETTLE_SECONDS = 0.5   # “切换后 0.5 秒”：避开切换瞬间的残影和压缩块
+SHARP_WINDOW = 1.5     # “最清晰”：只在镜头开头这段时间内挑选
+
+
+def _sharpness(frame):
+    """拉普拉斯方差：数值越大画面越清晰。缩到最长边 320 以控制耗时。"""
+    h, w = frame.shape[:2]
+    scale = min(1.0, 320 / max(h, w))
+    small = cv2.resize(frame, (max(1, round(w * scale)), max(1, round(h * scale))), interpolation=cv2.INTER_AREA)
+    return float(cv2.Laplacian(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
+
+
+def _pick_frame(cap, start, stop, pick, fps):
+    """按截取策略选出镜头 [start, stop] 中的一帧，返回 (帧号, 图像)；读取失败时图像为 None。"""
+    if pick == "settle":
+        target = max(start, min(stop, start + round(SETTLE_SECONDS * fps)))
+        return target, _grab_frame_at(cap, target)
+    first = _grab_frame_at(cap, start)
+    if pick != "sharp" or first is None:
+        return start, first
+    best_score, best_index, best = _sharpness(first), start, first
+    for index in range(start + 1, min(stop, start + max(1, round(SHARP_WINDOW * fps))) + 1):
+        ok, frame = cap.read()
+        if not ok:
+            break
+        score = _sharpness(frame)
+        # 需要明显更清晰才换，避免在噪点上来回跳，也尽量靠近切换点。
+        if score > best_score * 1.05:
+            best_score, best_index, best = score, index, frame
+    return best_index, best
+
+
 def _write_jpeg(path, frame, quality):
     # imencode + Python 文件 I/O 同时支持 Windows 中文路径，并检查编码/写入错误。
     ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
@@ -300,13 +333,19 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
         cap = cv2.VideoCapture(str(ses["video_path"]))
         cuts: list[dict] = []
         total_n = len(entries)
+        pick = job.get("pick", "first")
         try:
-            for i, (kind, frame_index) in enumerate(entries):
+            for i, (kind, source_frame) in enumerate(entries):
                 if job.get("cancel"):
                     raise _Cancelled()
                 job["pct"] = 78 + 16 * (i / max(1, total_n))
                 job["stage"] = f"截取关键帧原图… {i + 1}/{total_n}"
-                frame = _grab_frame_at(cap, frame_index)
+                # 截取策略只作用于自动检测的镜头；手动补帧和微调保持用户选定的帧。
+                stop = (entries[i + 1][1] - 1) if i + 1 < total_n else int(cache["frames"]) - 1
+                if kind in ("cut", "head"):
+                    frame_index, frame = _pick_frame(cap, source_frame, stop, pick, cache["fps"])
+                else:
+                    frame_index, frame = source_frame, _grab_frame_at(cap, source_frame)
                 if frame is None:
                     raise RuntimeError(f"第 {frame_index + 1} 帧读取失败，已保留上次完整结果")
                 _write_jpeg(fdir / f"{i}.jpg", frame, 95)
@@ -319,8 +358,11 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
                     prev = frame
                 _write_jpeg(tdir / f"{i}.jpg", prev, 85)
                 t = float(cache["times"][frame_index])
-                cuts.append({"kind": kind, "frame_index": frame_index, "time": round(t, 6),
-                             "label": _fmt_time(t), "asset_run":run, "file_index":i})
+                cut = {"kind": kind, "frame_index": frame_index, "time": round(t, 6),
+                       "label": _fmt_time(t), "asset_run":run, "file_index":i}
+                if kind in ("cut", "head"):
+                    cut["source_frame"] = source_frame   # 检测到的切换帧：跳过状态和微调按它对应
+                cuts.append(cut)
         finally:
             cap.release()
 
@@ -335,7 +377,8 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
             "params": {"sensitivity": job["sensitivity"],
                        "include_ends": bool(job.get("include_ends")),
                        "min_scene_seconds": job["min_scene_seconds"],
-                       "suppress_flash": job["suppress_flash"]},
+                       "suppress_flash": job["suppress_flash"],
+                       "pick": job.get("pick", "first")},
             "meta": {
                 "width": ses["meta"].get("width"),
                 "height": ses["meta"].get("height"),
@@ -451,7 +494,7 @@ def save_selection(sid: str, payload: dict):
         result = (_jobs.get(sid) or {}).get("result")
         if not result or payload.get("run") != result["run"]:
             raise HTTPException(409, "结果已更新，请刷新后再保存选择")
-        allowed = {c["frame_index"] if c["frame_index"] is not None else f"legacy:{result['run']}:{c.get('file_index', i)}"
+        allowed = {c.get("source_frame", c["frame_index"]) if c["frame_index"] is not None else f"legacy:{result['run']}:{c.get('file_index', i)}"
                    for i,c in enumerate(result["cuts"])}
         if any(i not in allowed for i in excluded):
             raise HTTPException(400, "选择记录包含不存在的关键帧")
@@ -581,7 +624,7 @@ def edit(sid: str, payload: dict):
             additions.add(target)
             kind = "manual"
         else:
-            original = next((key for key, value in adjustments.items() if value == source), source)
+            original = next((key for key, value in adjustments.items() if value == source), old_cut.get("source_frame", source))
             adjustments[original] = target
             kind = "adjusted"
         timestamp = float(ses["cache"]["times"][target])
@@ -616,7 +659,8 @@ def edit(sid: str, payload: dict):
         with _lock:
             if _jobs.get(sid) is not job or job.get("result") is not result or job["status"] == "running":
                 raise HTTPException(409, "分析任务或结果已更新，请重试编辑")
-            excluded = [target if value == source else value for value in ses.get("excluded", [])]
+            old_keys = {source, (old_cut or {}).get("source_frame", source)}
+            excluded = [target if value in old_keys else value for value in ses.get("excluded", [])]
             staged = {**workspace_store.current_update(ses,updated), "manual_additions": additions, "manual_adjustments": adjustments, "excluded": excluded}
             _persist_session(sid, staged, updated)
             ses.update({key:staged[key] for key in ("manual_additions", "manual_adjustments", "excluded", "cache_file", "latest_run", "updated_at", "results", "pending_delete")})
@@ -698,6 +742,9 @@ def analyze(payload: dict):
         raise HTTPException(400, "灵敏度须为有限数值，最小镜头间隔须为 0～10 秒")
     sens = min(100.0, max(0.0, sens))
     ends = bool(payload.get("include_ends", False))
+    pick = payload.get("pick", "first")
+    if pick not in PICKS:
+        raise HTTPException(400, "截取策略无效")
     with _lock:
         old = _jobs.get(sid)
         if old:
@@ -708,6 +755,7 @@ def analyze(payload: dict):
             "sensitivity": sens, "include_ends": ends,
             "min_scene_seconds": minimum,
             "suppress_flash": bool(payload.get("suppress_flash", True)),
+            "pick": pick,
             "run": uuid.uuid4().hex[:8],
         }
         job["result"] = old.get("result") if old else None
@@ -747,7 +795,8 @@ def status(sid: str):
         "run": job["run"],
         "video_name": _sessions[sid]["video_name"],
         "meta": _sessions[sid]["meta"],
-        "params": {key: job[key] for key in ("sensitivity", "include_ends", "min_scene_seconds", "suppress_flash")},
+        "params": {**{key: job[key] for key in ("sensitivity", "include_ends", "min_scene_seconds", "suppress_flash")},
+                   "pick": job.get("pick", "first")},
         "max_export": MAX_EXPORT,
         "excluded": ses.get("excluded", []),
         "workspace_note": ses.get("workspace_note", "") + ses.get("cleanup_warning", ""),

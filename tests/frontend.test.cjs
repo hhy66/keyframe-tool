@@ -186,3 +186,24 @@ test('archived screenshots can be individually selected without invented frame n
   assert.equal(app.run('state.sel.has(1)'),true);
   assert.equal(app.$('#cardEditor').hidden,true);
 });
+
+test('simple presets and the capture strategy are sent with the analysis',async()=>{
+  const calls=[];
+  const app=boot({fetchImpl:async(url,options={})=>{calls.push({url,options});return {ok:true,status:200,json:async()=>url.includes('/api/analyze')?{run:'r2'}:done};}});
+  await settle();
+  app.run("state.sid='s1'");
+  app.$('#pick').value='sharp';app.$('#pick').events.change();
+  await settle();
+  app.$('#sensMany').click();
+  await settle();
+  const bodies=calls.filter(c=>c.url==='/api/analyze').map(c=>JSON.parse(c.options.body));
+  assert.equal(bodies.at(-1).pick,'sharp');assert.equal(bodies.at(-1).sensitivity,80);
+  assert.equal(Number(app.$('#sens').value),80);
+});
+
+test('skip state follows the detected cut, not the captured frame',()=>{
+  const app=boot({saved:{kf_skipped_s1:'[30]'}});
+  app.context.fixture={...result,cuts:[result.cuts[0],{...result.cuts[1],frame_index:45,source_frame:30}]};
+  app.run("state.sid='s1'; render(fixture);");
+  assert.equal(app.run('state.sel.has(1)'),false);assert.equal(app.run('state.sel.has(0)'),true);
+});

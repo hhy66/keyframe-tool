@@ -2,7 +2,7 @@ const $ = s => document.querySelector(s);
 const state = {
   sid: null, busy: false, pollTimer: null, pollToken: 0, requestRevision: 0,
   analyzing: false, pendingAnalyze: false, run: null, resultRun: null,
-  sens: 50, ends: false, minimum: 0.1, flash: true, maxExport: 500,
+  sens: 50, ends: false, minimum: 0.1, flash: true, pick: 'first', maxExport: 500,
   cuts: [], thumbs: [], frames: [], sel: new Set(), dlBusy: false,
   videoSid: null, totalFrames: 0, jobRunning: false, editBusy: false,
   previewFrame: null, previewTime: 0, previewReady: false, previewToken: 0,
@@ -11,6 +11,12 @@ const state = {
 };
 const kindName = {cut: '镜头切换', head: '首帧', tail: '末帧', manual: '手动补帧', adjusted: '已微调', archived: '旧截图'};
 const sensName = v => v < 33 ? '保守' : v > 66 ? '敏感' : '适中';
+// 首次使用只需选“少 / 适中 / 多”，滑块留在高级参数里。
+const SENS_PRESETS = [['#sensFew', 25], ['#sensMid', 50], ['#sensMany', 80]];
+function showSens() {
+  $('#sensVal').textContent = `${sensName(state.sens)} (${state.sens})`;
+  SENS_PRESETS.forEach(([id, value]) => $(id).classList.toggle('active', state.sens === value));
+}
 let sensTimer = null;
 
 function toast(msg, err) {
@@ -37,7 +43,8 @@ function skippedFrames() {
   return new Set(Array.isArray(values) ? values : []);
 }
 function frameKey(cut, index) {
-  return cut.frame_index ?? `legacy:${state.resultRun}:${cut.file_index ?? index}`;
+  // 跳过状态按检测到的切换帧记录，换截取策略重新分析后仍对应同一个镜头。
+  return cut.source_frame ?? cut.frame_index ?? `legacy:${state.resultRun}:${cut.file_index ?? index}`;
 }
 function persistSelection() {
   if (!state.sid || !state.resultRun) return Promise.resolve();
@@ -88,16 +95,19 @@ function syncInfo(info, params = true) {
     state.ends = info.params.include_ends;
     state.minimum = info.params.min_scene_seconds ?? 0.1;
     state.flash = info.params.suppress_flash ?? true;
+    state.pick = info.params.pick || 'first';
     $('#sens').value = state.sens;
-    $('#sensVal').textContent = `${sensName(state.sens)} (${state.sens})`;
+    $('#pick').value = state.pick;
+    showSens();
     $('#chkEnds').checked = state.ends;
     $('#minScene').value = state.minimum;
     $('#chkFlash').checked = state.flash;
   }
+  showSens();
 }
 function setUploadBusy(busy) {
   state.busy = busy;
-  ['#sens', '#chkEnds', '#minScene', '#chkFlash', '#btnAgain'].forEach(s => $(s).disabled = busy);
+  ['#sens', '#chkEnds', '#minScene', '#chkFlash', '#pick', '#btnAgain', ...SENS_PRESETS.map(([id]) => id)].forEach(s => $(s).disabled = busy);
 }
 
 async function upload(file) {
@@ -163,7 +173,7 @@ async function analyze() {
     const j = await jsonRequest('/api/analyze', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({session_id:sid, sensitivity:state.sens, include_ends:state.ends,
-        min_scene_seconds:state.minimum, suppress_flash:state.flash}),
+        min_scene_seconds:state.minimum, suppress_flash:state.flash, pick:state.pick}),
     });
     if (revision !== state.requestRevision || sid !== state.sid) return;
     state.run = j.run;
@@ -455,9 +465,15 @@ fileInput.addEventListener('change', () => {if (fileInput.files[0]) upload(fileI
 drop.addEventListener('drop', e => {const f = e.dataTransfer?.files?.[0]; if (f) upload(f);});
 $('#sens').addEventListener('input', () => {
   state.sens = +$('#sens').value;
-  $('#sensVal').textContent = `${sensName(state.sens)} (${state.sens})`;
+  showSens();
   clearTimeout(sensTimer); sensTimer = setTimeout(analyze, 500);
 });
+SENS_PRESETS.forEach(([id, value]) => $(id).addEventListener('click', () => {
+  if (state.sens === value) return;
+  state.sens = value; $('#sens').value = value; showSens(); analyze();
+}));
+$('#pick').addEventListener('change', () => {state.pick = $('#pick').value; analyze();});
+showSens();
 $('#chkEnds').addEventListener('change', () => {state.ends = $('#chkEnds').checked; analyze();});
 $('#chkFlash').addEventListener('change', () => {state.flash = $('#chkFlash').checked; analyze();});
 $('#minScene').addEventListener('change', () => {state.minimum = +$('#minScene').value; analyze();});

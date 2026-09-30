@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import numpy as np
 
-DEFAULT_PARAMS = dict(sensitivity=50, include_ends=False, min_scene_seconds=0.1, suppress_flash=True)
+DEFAULT_PARAMS = dict(sensitivity=50, include_ends=False, min_scene_seconds=0.1, suppress_flash=True, pick='first')
 
 
 def asset_ref(result, index):
