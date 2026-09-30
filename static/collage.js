@@ -220,13 +220,16 @@ const CollageUI = {
       row.addEventListener('dragover',e=>{if(this.dragId!==null){e.preventDefault();e.dataTransfer.dropEffect='move';}});
       row.addEventListener('drop',e=>{e.preventDefault();if(this.dragId!==null){const dragged=this.dragId;this.dragId=null;this.move(dragged,index);}});
       const image=this.node('img');image.src=this.snapshot.thumbs[id];image.alt='';image.draggable=false;
-      row.append(image,this.node('span',`${index+1}. 原图 #${String(id+1).padStart(3,'0')}`+(this.crops[id]?' · 已裁剪':''),'collageOrderName'));
+      const info=this.node('div',undefined,'collageOrderInfo'),actions=this.node('div',undefined,'collageOrderActions');
+      info.append(this.node('span',`${index+1}. 原图 #${String(id+1).padStart(3,'0')}`,'collageOrderName'),
+        this.node('span',(this.snapshot.cuts[id].label||'时间未知')+(this.crops[id]?' · 已裁剪':''),'collageOrderMeta'));
       [['上移',index-1],['下移',index+1]].forEach(([label,position])=>{
         const button=this.node('button',label,'btn ghost small');button.disabled=position<0||position>=this.ids.length;
-        button.setAttribute('aria-label',`${label}拼图中的原图 ${id+1}`);button.addEventListener('click',()=>this.move(id,position));row.appendChild(button);
+        button.setAttribute('aria-label',`${label}拼图中的原图 ${id+1}`);button.addEventListener('click',()=>this.move(id,position));actions.appendChild(button);
       });
-      const crop=this.node('button','裁剪','btn ghost small');crop.disabled=original;crop.setAttribute('aria-label',`裁剪拼图中的原图 ${id+1}`);crop.addEventListener('click',()=>this.openCrop(id));row.appendChild(crop);
-      const remove=this.node('button','移除','btn ghost small');remove.setAttribute('aria-label',`从拼图移除原图 ${id+1}`);remove.addEventListener('click',()=>this.toggle(id));row.appendChild(remove);
+      const crop=this.node('button','裁剪','btn ghost small');crop.disabled=original;crop.setAttribute('aria-label',`裁剪拼图中的原图 ${id+1}`);crop.addEventListener('click',()=>this.openCrop(id));actions.appendChild(crop);
+      const remove=this.node('button','移除','btn ghost small');remove.setAttribute('aria-label',`从拼图移除原图 ${id+1}`);remove.addEventListener('click',()=>this.toggle(id));actions.appendChild(remove);
+      row.append(image,info,actions);
       order.appendChild(row);
     });
   },

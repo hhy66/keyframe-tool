@@ -32,3 +32,11 @@
 .cropArea img{display:block;max-width:100%}
 .cropSpacer{flex:1}
 @media(max-width:850px){.collageOptions .collageWide{grid-column:span 2}.cropArea{height:52vh}}
+/* Order rows: thumbnail left, name + time on the first line, actions on the second, so a narrow sidebar never squeezes the text. */
+.collageOrderRow{display:grid;grid-template-columns:64px minmax(0,1fr);grid-template-areas:"thumb info" "thumb actions";gap:5px 10px;align-items:center}
+.collageOrderRow img{grid-area:thumb;width:64px;height:48px;align-self:center}
+.collageOrderInfo{grid-area:info;display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;min-width:0}
+.collageOrderRow .collageOrderName{flex:none;font-size:12.5px;font-weight:600;color:#26354b;white-space:nowrap}
+.collageOrderMeta{font-size:11.5px;color:#6b7a90;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.collageOrderActions{grid-area:actions;display:flex;gap:4px}
+.collageOrderActions .btn.small{flex:1 1 0;min-width:0;white-space:nowrap;padding:4px 2px;font-size:12px;margin:0}
