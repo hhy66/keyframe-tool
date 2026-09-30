@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="/vendor/cropper-1.6.2.min.css">
 <link rel="stylesheet" href="/collage.css">
 <link rel="stylesheet" href="/layout.css">
+<link rel="stylesheet" href="/viewer.css">
 <style>
   :root{
     --accent:#4f46e5; --accent2:#7c3aed; --bg:#f3f4fb; --card:#ffffff;
@@ -130,17 +131,6 @@
     background:#fff; border-radius:14px; padding:18px 20px; width:min(560px,100%);
     box-shadow:0 20px 60px rgba(0,0,0,.35);
   }
-  .lbBox{
-    background:#11142a; border-radius:14px; padding:10px; max-width:min(1200px,96vw);
-    box-shadow:0 20px 60px rgba(0,0,0,.45);
-  }
-  .lbBox img{display:block; max-width:100%; max-height:74vh; margin:0 auto; border-radius:8px}
-  .lbBar{
-    display:flex; align-items:center; gap:10px; margin-top:10px; padding:0 4px;
-    color:#cbd2f5; font-size:13px;
-  }
-  .lbBar .t{flex:1; font-variant-numeric:tabular-nums}
-  .lbBar a.btn{text-decoration:none}
   .spin{display:inline-block; width:14px; height:14px; border:2px solid rgba(255,255,255,.4);
     border-top-color:#fff; border-radius:50%; animation:sp .7s linear infinite; vertical-align:-2px; margin-right:6px}
   @keyframes sp{to{transform:rotate(360deg)}}
@@ -163,8 +153,21 @@
 <body>
 
 <header class="appHeader">
-  <h1>🎞️ 视频 Cut 关键帧截取工具</h1>
-  <p>上传视频 → 自动检测镜头切换 → 截取每个镜头的画面作为参考图 · 数据只存在于本机</p>
+  <div class="brand">
+    <svg class="brandMark" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="8"/>
+      <path d="M7 22.5h18" class="track"/>
+      <path d="M16 8.5l5.5 5.5-5.5 5.5-5.5-5.5z" class="key"/>
+    </svg>
+    <div class="brandText">
+      <h1>关键帧截取</h1>
+      <p>视频镜头切换检测 · 参考图与拼图</p>
+    </div>
+  </div>
+  <div class="headerFile" id="headerFile" hidden></div>
+  <div class="headerMeta">
+    <span class="headerChip" title="视频只复制到本机工作目录，处理全部在本机完成"><i aria-hidden="true"></i>本机处理 · 视频不上传</span>
+  </div>
 </header>
 
 <div class="appShell">
@@ -333,11 +336,17 @@
       页面里的网格只是压缩预览，<b>zip 打包的均为视频原始分辨率 JPEG 图片</b>（JPEG 质量 95）。
     </div>
     <details class="shortcuts" id="shortcutHelp">
-      <summary>快捷键：← → ↑ ↓ 移动 · 空格 保留/跳过 · Enter 看大图 · Shift+单击 范围选择（点此或按 ? 查看全部）</summary>
+      <summary>快捷键：单击缩略图或按 Enter 进入逐张审阅（↑ 保留并下一张 · ↓ 跳过并下一张）· 网格里 ← → ↑ ↓ 移动 · 空格 保留/跳过（点此或按 ? 查看全部）</summary>
       <table>
-        <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>在结果中移动当前卡片（蓝框）</td></tr>
+        <tr><th colspan="2">逐张审阅（全屏大图）</th></tr>
+        <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>保留 / 跳过，并自动进入下一张</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>上一张 / 下一张；<kbd>Home</kbd> <kbd>End</kbd> 跳到首尾</td></tr>
+        <tr><td><kbd>空格</kbd></td><td>切换保留 / 跳过，停在当前这张</td></tr>
+        <tr><td><kbd>E</kbd> · <kbd>D</kbd> · <kbd>Esc</kbd></td><td>逐帧微调 · 下载原图 · 回到网格</td></tr>
+        <tr><th colspan="2">结果网格</th></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>移动当前卡片（蓝框）</td></tr>
         <tr><td><kbd>空格</kbd> 或 <kbd>X</kbd></td><td>保留 / 跳过当前卡片</td></tr>
-        <tr><td><kbd>Enter</kbd></td><td>查看当前卡片的原图；大图里用 <kbd>←</kbd> <kbd>→</kbd> 翻页，<kbd>空格</kbd> 保留 / 跳过，<kbd>Esc</kbd> 关闭</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>从当前卡片开始逐张审阅</td></tr>
         <tr><td><kbd>E</kbd></td><td>逐帧微调当前卡片</td></tr>
         <tr><td><kbd>Shift</kbd> + 单击</td><td>把上次单击到这次之间的卡片设为同样的保留 / 跳过</td></tr>
         <tr><td><kbd>?</kbd></td><td>展开 / 收起本说明</td></tr>
@@ -362,14 +371,35 @@
 </div>
 
 <!-- 原图查看灯箱 -->
-<div class="modal" id="lb" hidden>
-  <div class="lbBox">
-    <img id="lbImg" alt="原图">
-    <div class="lbBar">
-      <span class="t" id="lbCap"></span>
-      <a class="btn small" id="lbDl">⬇ 下载此原图</a>
-      <button class="btn ghost small" id="lbClose" style="color:#fff; border-color:#3a3f66; background:transparent">关闭</button>
+<div class="viewer" id="lb" hidden role="dialog" aria-modal="true" aria-label="逐张审阅">
+  <div class="vwTop">
+    <div class="vwInfo">
+      <b id="vwPos"></b>
+      <span id="vwMeta"></span>
+      <span id="vwSimilar" class="vwTag" hidden></span>
     </div>
+    <div class="vwTools">
+      <span id="vwStats" class="vwStats"></span>
+      <a id="vwDownload" class="vwBtn" title="下载这张原图（D）">下载原图</a>
+      <button type="button" id="vwEdit" class="vwBtn" title="关闭大图，逐帧微调这张（E）">逐帧微调</button>
+      <button type="button" id="lbClose" class="vwBtn" title="回到网格（Esc）">关闭</button>
+    </div>
+  </div>
+  <div class="vwStage" id="vwStage">
+    <button type="button" class="vwNav prev" id="vwPrev" aria-label="上一张（←）">‹</button>
+    <figure class="vwFigure">
+      <img id="vwImg" alt="">
+      <span id="vwState" class="vwState"></span>
+    </figure>
+    <button type="button" class="vwNav next" id="vwNext" aria-label="下一张（→）">›</button>
+  </div>
+  <div class="vwBottom">
+    <div class="vwDecide">
+      <button type="button" class="vwChoice skip" id="vwSkip" aria-pressed="false"><kbd>↓</kbd> 跳过并下一张</button>
+      <button type="button" class="vwChoice keep" id="vwKeep" aria-pressed="true"><kbd>↑</kbd> 保留并下一张</button>
+    </div>
+    <div class="vwStrip" id="vwStrip" aria-label="全部截图"></div>
+    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · E 微调 · D 下载 · Esc 关闭</div>
   </div>
 </div>
 
@@ -418,6 +448,7 @@
 <script src="/storage.js"></script>
 <script src="/layout.js"></script>
 <script src="/review.js"></script>
+<script src="/viewer.js"></script>
 <div id="collagePanel" class="collageOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="collageTitle">
   <div class="collageEditor">
     <div class="collageHeader">

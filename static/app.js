@@ -626,26 +626,14 @@ function updateToolbar() {
     (state.sel.size > state.maxExport ? '，请减少选择后下载。' : '；下载交给浏览器保存。');
   if (typeof Review !== 'undefined') Review.updateSkipButton();
 }
+// The full-screen review (viewer.js) shows one picture at a time.
 function openLb(i) {
   if (!state.frames[i]) return;
   state.lbIndex = i;
-  $('#lbImg').src = state.frames[i];
-  const c = state.cuts[i];
-  $('#lbCap').textContent =
-    '#' +
-    String(i + 1).padStart(3, '0') +
-    '  ' +
-    c.label +
-    ' · ' +
-    (kindName[c.kind] || c.kind) +
-    (c.frame_index == null ? ' · 原帧号未知' : ' · 第 ' + (c.frame_index + 1) + ' 帧');
-  $('#lbDl').href = state.frames[i].replace('/api/frame/', '/api/frame-dl/');
-  $('#lbDl').download = '';
-  $('#lb').hidden = false;
+  if (typeof Viewer !== 'undefined') Viewer.open(i);
 }
 function closeLb() {
-  $('#lb').hidden = true;
-  $('#lbImg').src = '';
+  if (typeof Viewer !== 'undefined') Viewer.close();
 }
 
 async function download() {
@@ -824,13 +812,6 @@ $('#videoPlayer').addEventListener('timeupdate', () => {
       requestPreview({time: $('#videoPlayer').currentTime});
   }),
 );
-$('#lbClose').addEventListener('click', closeLb);
-$('#lb').addEventListener('click', e => {
-  if (e.target.id === 'lb') closeLb();
-});
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeLb();
-});
 
 async function loadWorkspace() {
   const button = $('#btnWorkspace');

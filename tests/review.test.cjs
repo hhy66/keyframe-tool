@@ -99,7 +99,7 @@ test('arrows move by one, up and down move by a row of the grid', () => {
   r.key('ArrowUp');
   assert.equal(r.state.cursor, 2);
 });
-test('space toggles, Enter opens the picture, E starts fine-tuning, and the lightbox pages with arrows', () => {
+test('space toggles, Enter opens the picture, E starts fine-tuning; the open viewer owns the keys', () => {
   const r = boot();
   r.key('ArrowRight');
   r.key('ArrowRight');
@@ -107,10 +107,11 @@ test('space toggles, Enter opens the picture, E starts fine-tuning, and the ligh
   r.key('e');
   r.key('Enter');
   assert.equal(r.log.join('|'), 'toggle 1|edit 1|open 1');
+  // With the full-screen review open, the grid shortcuts stay quiet (viewer.js handles the keys).
   r.key('ArrowRight');
-  assert.equal(r.state.lbIndex, 2);
   r.key(' ');
-  assert.equal(r.log.at(-1), 'toggle 2');
+  assert.equal(r.state.cursor, 1);
+  assert.equal(r.log.join('|'), 'toggle 1|edit 1|open 1');
 });
 test('shortcuts stay out of the way while typing or when another panel is open', () => {
   const r = boot();
