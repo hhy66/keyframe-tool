@@ -86,3 +86,33 @@ class StaleScriptTests(unittest.TestCase):
         self.assertEqual(asyncio.run(call('/app.js')).headers['cache-control'], 'no-cache')
         self.assertEqual(asyncio.run(call('/')).headers['cache-control'], 'no-cache')
         self.assertNotIn('cache-control', asyncio.run(call('/api/status/x')).headers)
+
+
+class AssetVersionTests(unittest.TestCase):
+    def test_page_links_scripts_with_a_content_version_that_changes_with_the_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            static = Path(tmp)
+            (static / 'vendor').mkdir()
+            (static / 'app.js').write_text('one', encoding='utf-8')
+            (static / 'vendor' / 'lib.js').write_text('lib', encoding='utf-8')
+            (static / 'style.css').write_text('a{}', encoding='utf-8')
+            (static / 'index.html').write_text(
+                '<link rel="stylesheet" href="/style.css"><link href="https://fonts.example/x.css">'
+                '<script src="/app.js"></script><script src="/vendor/lib.js"></script><script src="/missing.js"></script>',
+                encoding='utf-8',
+            )
+            with patch.object(server, 'STATIC', static):
+                server._asset_versions.clear()
+                first = server.index_page()
+                html = first.body.decode('utf-8')
+                self.assertEqual(first.headers['cache-control'], 'no-cache')
+                self.assertRegex(html, r'src="/app\.js\?v=[0-9a-f]{10}"')
+                self.assertRegex(html, r'src="/vendor/lib\.js\?v=[0-9a-f]{10}"')
+                self.assertRegex(html, r'href="/style\.css\?v=[0-9a-f]{10}"')
+                self.assertIn('href="https://fonts.example/x.css"', html)
+                self.assertIn('src="/missing.js"', html)
+                (static / 'app.js').write_text('two, changed', encoding='utf-8')
+                second = server.index_page().body.decode('utf-8')
+                version = lambda text: text.split('/app.js?v=')[1][:10]
+                self.assertNotEqual(version(html), version(second))
+                self.assertEqual(html.split('/style.css?v=')[1][:10], second.split('/style.css?v=')[1][:10])

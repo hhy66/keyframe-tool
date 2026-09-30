@@ -51,7 +51,7 @@ from detection import (  # noqa: F401  检测算法独立成模块，这里保�
     probe,
 )
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
@@ -1247,6 +1247,42 @@ def delete_collage(sid: str, token: str):
 # ---------------------------------------------------------------- 静态页面
 
 _storage = storage_manager.install(sys.modules[__name__])
+
+_asset_versions: dict[tuple, str] = {}
+
+
+def _asset_version(name):
+    """页面引用的脚本 / 样式的内容指纹；文件没变时复用，变了就换新号。"""
+    try:
+        path = (STATIC / name).resolve()
+        path.relative_to(STATIC.resolve())
+        stat = path.stat()
+    except (OSError, ValueError):
+        return None
+    key = (name, stat.st_mtime_ns, stat.st_size)
+    if key not in _asset_versions:
+        import hashlib
+
+        _asset_versions[key] = hashlib.sha1(path.read_bytes()).hexdigest()[:10]
+    return _asset_versions[key]
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+def index_page():
+    """给页面里的本地脚本和样式加上内容版本号（/app.js?v=…），
+    更新后浏览器必定取新文件，不会把缓存的旧脚本和新页面混在一起。"""
+    import re
+
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    def stamp(match):
+        version = _asset_version(match.group(2).lstrip("/"))
+        return f'{match.group(1)}="{match.group(2)}?v={version}"' if version else match.group(0)
+
+    html = re.sub(r'(src|href)="(/[^"?#:]+\.(?:js|css))"', stamp, html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
 
 app.mount("/", StaticFiles(directory=str(STATIC), html=True), name="static")
 
