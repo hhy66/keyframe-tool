@@ -156,7 +156,7 @@ const Viewer = {
     const target = event.target || {};
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) && target.type !== 'checkbox') return;
     // Letters follow the physical key so they also work with a Chinese input method on.
-    const key = {KeyA: 'a', KeyE: 'e', KeyD: 'd', KeyX: 'x'}[event.code] || event.key.toLowerCase();
+    const key = {KeyA: 'a', KeyG: 'g', KeyE: 'e', KeyD: 'd', KeyX: 'x'}[event.code] || event.key.toLowerCase();
     const actions = {
       arrowleft: () => this.show(this.index - 1),
       arrowright: () => this.show(this.index + 1),
@@ -168,6 +168,7 @@ const Viewer = {
       end: () => this.show(this.count() - 1),
       e: () => this.edit(),
       a: () => typeof Analysis !== 'undefined' && Analysis.togglePanel(),
+      g: () => typeof Analysis !== 'undefined' && Analysis.toggleGuides(),
       d: () => this.el('#vwDownload').click(),
       escape: () => this.close(),
     };
