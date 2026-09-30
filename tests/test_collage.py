@@ -195,3 +195,110 @@ class JustifiedPortTests(unittest.TestCase):
         self.assertEqual(justified_layout.rows([4,1,1],1040,10,320),[[0],[1,2]])
         self.assertEqual(justified_layout.rows([1.5,1.5,1.5],1040,10,320),[[0,1],[2]])
 
+
+
+class LabelsNotesAndBatchTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)
+        self.sources=[]
+        for i in range(20):
+            p=self.root/f'{i}.png';Image.new('RGB',(160,90),(10*i,120,200-5*i)).save(p)
+            self.sources.append(dict(id=i,path=p,src=f'/f/{i}',thumb=f'/t/{i}',label=f'00:00:{i:02d}'))
+    def tearDown(self):self.tmp.cleanup()
+    def body(self,**kw):
+        return {'per_page':9,'mode':'custom','width':1600,'layout':'justified','gap':'small',**kw}
+    def test_label_positions_follow_the_chosen_corner(self):
+        import collage_engine
+        for position,right,bottom in (('tl',False,False),('tr',True,False),('bl',False,True),('br',True,True)):
+            with self.subTest(position=position):
+                plan=collage_engine.plan(self.body(time=True,label_position=position),self.sources[:3])
+                item=plan['items'][0];t=item['target']
+                x,y,w,h,_=collage_engine.caption_box(item)
+                self.assertEqual(x+w/2>t['x']+t['width']/2,right);self.assertEqual(y+h/2>t['y']+t['height']/2,bottom)
+                self.assertIsNone(item['below']);self.assertEqual(plan['caption_height'],0)
+    def test_order_numbers_continue_across_pages(self):
+        import collage_engine
+        plan=collage_engine.plan(self.body(order=True,index=True,page=2,per_page=4),self.sources[4:6])
+        self.assertEqual([i['caption'] for i in plan['items']],['05  #005','06  #006'])
+    def test_notes_and_below_labels_use_a_band_under_every_photo(self):
+        import collage_engine
+        body=self.body(order=True,time=True,label_position='below',notes={'1':'航拍推镜'})
+        plan=collage_engine.plan(body,self.sources[:3])
+        band=plan['caption_height'];self.assertGreater(band,0)
+        for item in plan['items']:
+            b=item['below'];t=item['target']
+            self.assertEqual((b['y'],b['height']),(t['y']+t['height'],band));self.assertEqual(item['caption'],'')
+        self.assertEqual(plan['items'][1]['below']['note'],'航拍推镜');self.assertTrue(plan['items'][1]['below']['label'].startswith('02'))
+        bottom=max(i['below']['y']+band for i in plan['items']);self.assertEqual(plan['height'],bottom+plan['gap'])
+        out=self.root/'n.png';collage_engine.render(plan,self.sources[:3],body,out,None)
+        with Image.open(out) as im:self.assertEqual(im.size,(plan['width'],plan['height']))
+        grid=collage_engine.plan({**body,'layout':'grid','shape':'landscape','fit':'cover'},self.sources[:3])
+        self.assertEqual(grid['height'],grid['items'][0]['cell']['height']+grid['caption_height']+2*grid['gap'])
+    def test_long_notes_are_trimmed_and_invalid_notes_rejected(self):
+        import collage_engine
+        plan=collage_engine.plan(self.body(per_page=16,notes={'0':'很长的备注'*12}),self.sources[:16])
+        note=plan['items'][0]['below']['note'];self.assertTrue(note.endswith('…'))
+        for notes in ({'0':'x'*61},{'0':'a\nb'},{'99':'x'},{'0':3},[]):
+            with self.subTest(notes=notes),self.assertRaises(ValueError):collage_engine.plan(self.body(notes=notes),self.sources[:2])
+    def test_rounded_corners_need_a_gap(self):
+        import collage_engine
+        plan=collage_engine.plan(self.body(gap='none',radius='large'),self.sources[:4])
+        self.assertEqual(plan['radius'],0);self.assertTrue(plan['radius_disabled'])
+        self.assertTrue(all(i['radius']==0 for i in plan['items']))
+        self.assertFalse(collage_engine.plan(self.body(gap='none'),self.sources[:4])['radius_disabled'])
+    def test_page_sizes_and_columns(self):
+        import collage_engine
+        for per_page,columns in ((4,2),(9,3),(12,4),(16,4)):
+            with self.subTest(per_page=per_page):
+                plan=collage_engine.plan(self.body(layout='grid',per_page=per_page),self.sources[:per_page])
+                self.assertEqual(plan['columns'],columns);self.assertEqual(plan['rows'],per_page//columns)
+        with self.assertRaises(ValueError):collage_engine.plan(self.body(per_page=4),self.sources[:5])
+        with self.assertRaises(ValueError):collage_engine.plan(self.body(per_page=10),self.sources[:5])
+        self.assertEqual(collage_engine.plan({'grid':2,'mode':'original'},self.sources[:4])['per_page'],4)
+    def test_storyboard_csv_escapes_formulas(self):
+        import collage_engine,csv,io
+        cuts=[{'label':f'00:00:{i:02d}','frame_index':i*25} for i in range(5)]
+        text=collage_engine.storyboard_csv({'ids':[3,1],'mode':'share','notes':{'3':'=cmd','1':'特写'},'crops':{'1':{'x':.1,'y':0,'width':.5,'height':1}}},cuts)
+        self.assertTrue(text.startswith('﻿'))
+        rows=list(csv.reader(io.StringIO(text[1:])))
+        self.assertEqual(rows[1],['1','#004','00:00:03','75',"'=cmd",''])
+        self.assertEqual(rows[2][:5],['2','#002','00:00:01','25','特写']);self.assertIn('宽50%',rows[2][5])
+
+
+class RenderAllTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory()
+        self.root=Path(self.tmp.name)
+        self.p=patch.object(server,'WORK',self.root); self.p.start()
+        self.m=storage_manager.Manager(server)
+        self.q=patch.object(server,'_storage',self.m); self.q.start()
+        self.result={'run':'abcd','video_name':'测试.mp4','cuts':[{'label':f'00:00:{i:02d}','frame_index':i} for i in range(11)]}
+        for i in range(11):
+            p=self.root/'sample'/'frames'/'abcd'/f'{i}.jpg'; p.parent.mkdir(parents=True,exist_ok=True)
+            Image.new('RGB',(32,18),(i*20,20,200)).save(p)
+        server._sessions['sample']={'latest_run':'abcd','video_name':'测试.mp4','results':{'abcd':self.result},'worker_lock':threading.Lock()}
+    def tearDown(self):
+        server._sessions.clear();server._jobs.clear();self.q.stop();self.p.stop();self.tmp.cleanup()
+    def test_zip_holds_every_page_and_the_storyboard(self):
+        import zipfile,json
+        body={'run':'abcd','ids':list(range(10,-1,-1)),'per_page':4,'mode':'share','width':200,'layout':'justified','notes':{'10':'开场'},'format':'jpeg'}
+        out=server.render_all_collages('sample',body)
+        self.assertEqual(out['pages'],3)
+        exports=self.root/'sample'/'exports'
+        with zipfile.ZipFile(exports/f"collage-{out['token']}.zip") as z:
+            names=z.namelist()
+            self.assertEqual(sorted(n for n in names if n.endswith('.jpg')),[f'参考拼图_测试_{n:02d}.jpg' for n in (1,2,3)])
+            csv_text=z.read('分镜表.csv').decode('utf-8-sig')
+            self.assertIn('1,#011,00:00:10,10,开场',csv_text)
+            with z.open('参考拼图_测试_03.jpg') as f,Image.open(f) as im:self.assertEqual(im.width,200)
+        self.assertEqual(sorted(p.name for p in exports.iterdir()),sorted([f"collage-{out['token']}.zip",f"collage-{out['token']}.json"]))
+        response=server.collage_file('sample',out['token'],'download');self.assertIn('filename*=',response.headers['content-disposition']);response._release_lease()
+        with self.assertRaises(HTTPException):server.collage_file('sample',out['token'],'preview')
+        server.delete_collage('sample',out['token']);self.assertFalse(any(exports.iterdir()))
+    def test_batch_validation_and_csv_endpoint(self):
+        for delta in ({'run':'old'},{'ids':[0,0]},{'per_page':5},{'notes':{'3':'x'}}):
+            with self.subTest(delta=delta),self.assertRaises(HTTPException):
+                server.render_all_collages('sample',{'run':'abcd','ids':[0,1],'mode':'share',**delta})
+        response=server.collage_storyboard('sample',{'run':'abcd','ids':[2,0],'notes':{'2':'远景'}})
+        self.assertEqual(response.media_type,'text/csv; charset=utf-8');self.assertIn("filename*=UTF-8''",response.headers['content-disposition'])
+        self.assertIn('远景',response.body.decode('utf-8-sig'))

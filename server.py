@@ -889,14 +889,30 @@ def re_sub(name: str) -> str:
 
 # ---------------------------------------------------------------- Pillow reference collages
 
-def _collage_sources(sid, payload):
+def _collage_result(sid, payload):
     ses = _session(sid)
     result = ses.get('results', {}).get(ses.get('latest_run'))
     if not result or payload.get('run') != result['run']:
         raise HTTPException(409, '结果已更新，请刷新后重新制作拼图')
+    return result
+
+
+def _collage_ids(result, payload, limit):
     ids = payload.get('ids')
-    if not isinstance(ids, list) or not 1 <= len(ids) <= 9 or any(type(i) is not int or not 0 <= i < len(result['cuts']) for i in ids) or len(set(ids)) != len(ids):
-        raise HTTPException(400, '请选择1至9张不重复的有效关键帧')
+    if not isinstance(ids, list) or not 1 <= len(ids) <= limit or any(type(i) is not int or not 0 <= i < len(result['cuts']) for i in ids) or len(set(ids)) != len(ids):
+        raise HTTPException(400, f'请选择1至{limit}张不重复的有效关键帧')
+    return ids
+
+
+def _collage_options(payload):
+    import collage_engine
+    try: return collage_engine.validate_options(payload, payload.get('ids', []))
+    except ValueError as exc: raise HTTPException(400, str(exc)) from exc
+
+
+def _collage_sources(sid, payload, limit=16):
+    result = _collage_result(sid, payload)
+    ids = _collage_ids(result, payload, limit)
     sources = []
     for i in ids:
         try:
@@ -965,8 +981,8 @@ def render_collage(sid: str, payload: dict):
     path=directory/f'{name}.{ext}';preview=directory/f'{name}-preview.jpg';metadata=directory/f'{name}.json'
     try:
         collage_engine.render(plan,sources,payload,path,preview)
-        video_name=re_safe(Path(_session(sid).get('video_name','video')).stem or 'video')
-        layout='智能排版' if plan['layout']=='justified' else f"{payload.get('grid',3)}x{payload.get('grid',3)}"
+        video_name=_collage_video_name(sid)
+        layout='智能排版' if plan['layout']=='justified' else f"{plan['columns']}列网格"
         filename=f"参考拼图_{video_name}_{layout}_{payload.get('page',1):02d}.{ext}"
         workspace_store.atomic_json(metadata,dict(token=token,format=fmt,filename=filename,run=payload['run'],created_at=time.time(),width=plan['width'],height=plan['height']))
     except Exception as exc:
@@ -978,6 +994,65 @@ def render_collage(sid: str, payload: dict):
                 preview_url=base+'/preview',image_url=base+'/image',download_url=base+'/download',plan=plan)
 
 
+def _collage_video_name(sid):
+    return re_safe(Path(_session(sid).get('video_name','video')).stem or 'video')
+
+
+@app.post('/api/collage/{sid}/render-all')
+@_storage_guard
+def render_all_collages(sid: str, payload: dict):
+    """Every page of the selection, rendered one at a time into a zip with the storyboard CSV."""
+    import collage_engine, time
+    result = _collage_result(sid, payload)
+    sources = _collage_sources(sid, payload, collage_engine.MAX_BATCH)
+    capacity, _ = _collage_options(payload)
+    ids = payload['ids']
+    pages = [ids[i:i+capacity] for i in range(0, len(ids), capacity)]
+    by_id = {s['id']: s for s in sources}
+    plans = []
+    for n, page_ids in enumerate(pages, 1):
+        page = collage_engine.page_payload(payload, page_ids, n)
+        plan = _collage_plan(page, [by_id[i] for i in page_ids])
+        if not plan['can_render']: raise HTTPException(400, f'第 {n} 张拼图：{plan["warning"]}')
+        plans.append((page, plan))
+    _expire_collages(sid, keep=2)
+    token = uuid.uuid4().hex
+    fmt = payload.get('format','png'); ext = 'png' if fmt == 'png' else 'jpg'
+    directory = _safe_path(sid,'exports'); directory.mkdir(exist_ok=True)
+    archive_path = directory/f'collage-{token}.zip'; scratch = directory/f'collage-{token}.{ext}'
+    metadata = directory/f'collage-{token}.json'
+    video_name = _collage_video_name(sid)
+    try:
+        with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_STORED) as archive:
+            for page, plan in plans:
+                collage_engine.render(plan, [by_id[i] for i in page['ids']], page, scratch, None)
+                archive.write(scratch, f"参考拼图_{video_name}_{page['page']:02d}.{ext}")
+                scratch.unlink()
+            archive.writestr('分镜表.csv', collage_engine.storyboard_csv(payload, result['cuts']))
+        filename = f'参考拼图_{video_name}_共{len(pages)}张.zip'
+        workspace_store.atomic_json(metadata, dict(token=token, format='zip', filename=filename, run=payload['run'],
+                                                   created_at=time.time(), pages=len(pages)))
+    except Exception as exc:
+        for p in (archive_path, scratch, metadata): p.unlink(missing_ok=True)
+        raise HTTPException(400, '拼图打包失败：'+str(exc)) from exc
+    _storage.prepared[(sid, metadata.name)] = time.monotonic()+60
+    return dict(token=token, pages=len(pages), bytes=archive_path.stat().st_size,
+                download_url=f'/api/collage/{sid}/{token}/download')
+
+
+@app.post('/api/collage/{sid}/storyboard')
+@_storage_guard
+def collage_storyboard(sid: str, payload: dict):
+    import collage_engine
+    from urllib.parse import quote
+    result = _collage_result(sid, payload)
+    _collage_ids(result, payload, collage_engine.MAX_BATCH)
+    _collage_options(payload)
+    name = quote(f'分镜表_{_collage_video_name(sid)}.csv')
+    return Response(collage_engine.storyboard_csv(payload, result['cuts']), media_type='text/csv; charset=utf-8',
+                    headers={'Content-Disposition': f"attachment; filename*=UTF-8''{name}"})
+
+
 @app.get('/api/collage/{sid}/{token}/{view}')
 @_storage_guard
 def collage_file(sid: str, token: str, view: str):
@@ -987,7 +1062,11 @@ def collage_file(sid: str, token: str, view: str):
     metadata=_safe_path(sid,'exports',f'collage-{token}.json')
     try:info=json.loads(metadata.read_text(encoding='utf-8'))
     except (OSError,ValueError):raise HTTPException(404,'拼图已清理，请重新生成')
-    if info.get('format') not in ('png','jpeg'):raise HTTPException(404,'拼图记录无效')
+    if info.get('format') not in ('png','jpeg','zip'):raise HTTPException(404,'拼图记录无效')
+    if info['format']=='zip':
+        path=_safe_path(sid,'exports',f'collage-{token}.zip')
+        if view!='download' or not path.is_file():raise HTTPException(404,'拼图已清理，请重新生成')
+        return _file_response(sid,path,media_type='application/zip',filename=re_safe(info.get('filename',f'参考拼图_{token[:8]}.zip')))
     ext='png' if info['format']=='png' else 'jpg'
     path=_safe_path(sid,'exports',f'collage-{token}-preview.jpg' if view=='preview' else f'collage-{token}.{ext}')
     if not path.is_file():raise HTTPException(404,'拼图已清理，请重新生成')
@@ -1003,7 +1082,7 @@ def delete_collage(sid: str, token: str):
     _session(sid)
     if not collage_engine.TOKEN.fullmatch(token):raise HTTPException(400,'拼图标识无效')
     if _storage.active.get(sid,0):raise HTTPException(409,'文件正在发送，请稍后清理')
-    for suffix in ('.png','.jpg','-preview.jpg','.json'):
+    for suffix in ('.png','.jpg','.zip','-preview.jpg','.json'):
         path=_safe_path(sid,'exports',f'collage-{token}{suffix}')
         path.unlink(missing_ok=True)
         _storage.prepared.pop((sid,path.name),None)

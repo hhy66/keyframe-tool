@@ -63,9 +63,10 @@ def row_heights(groups, ratios, width, spacing):
     return [(width - spacing * (len(g) - 1)) / sum(ratios[i] for i in g) for g in groups]
 
 
-def best_rows(ratios, width, spacing, target_ratio):
+def best_rows(ratios, width, spacing, target_ratio, row_extra=0):
     """Sweep justified-layout's target row height and keep the grouping whose exact,
-    fully justified result is closest to the requested overall shape with even rows."""
+    fully justified result is closest to the requested overall shape with even rows.
+    row_extra is fixed height added below every row (a caption band)."""
     if not ratios:
         return []
     low = width / sum(ratios) * 0.5
@@ -80,7 +81,7 @@ def best_rows(ratios, width, spacing, target_ratio):
         heights = row_heights(groups, ratios, width, spacing)
         if min(heights) <= 0:
             return math.inf
-        total = sum(heights) + spacing * (len(groups) - 1)
+        total = sum(heights) + (spacing + row_extra) * len(groups) - spacing
         return abs(math.log(width / total / target_ratio)) + 0.5 * math.log(max(heights) / min(heights))
 
     return list(min(candidates.values(), key=lambda g: (round(score(g), 9), [len(r) for r in g])))
