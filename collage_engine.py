@@ -1,4 +1,5 @@
 """Pixel-exact source grids, justified reference boards and bounded, serial Pillow exports."""
+
 import csv
 import io
 import math
@@ -19,8 +20,8 @@ TOKEN = re.compile(r'^[0-9a-f]{32}$')
 TEMP_NAME = re.compile(r'^collage-[0-9a-f]{32}(?:-preview\.jpg|\.png|\.jpg|\.zip|\.json)$')
 BACKGROUNDS = {'white': (255, 255, 255), 'light': (241, 243, 246), 'dark': (17, 24, 39), 'black': (0, 0, 0)}
 # Fractions of the whole collage width, so a style looks the same at 1500 or 6000 pixels.
-GAPS = {'none': 0, 'small': .004, 'medium': .01, 'large': .02}
-RADII = {'none': 0, 'small': .004, 'medium': .008, 'large': .016}
+GAPS = {'none': 0, 'small': 0.004, 'medium': 0.01, 'large': 0.02}
+RADII = {'none': 0, 'small': 0.004, 'medium': 0.008, 'large': 0.016}
 CANVAS = {'landscape': 16 / 9, 'square': 1, 'portrait': 3 / 4}
 CELL = {'landscape': 16 / 9, 'square': 1, 'portrait': 9 / 16}
 # Photos per page and the number of grid columns used for it.
@@ -61,10 +62,13 @@ def font_path():
         candidates += sorted(str(p) for p in folder.glob('*') if p.suffix.lower() in ('.ttf', '.otf', '.ttc'))
     candidates += [str(windows / n) for n in ('msyh.ttc', 'msyhbd.ttc', 'simhei.ttf', 'Deng.ttf', 'simsun.ttc')]
     candidates += [
-        '/System/Library/Fonts/PingFang.ttc', '/System/Library/Fonts/STHeiti Medium.ttc',
+        '/System/Library/Fonts/PingFang.ttc',
+        '/System/Library/Fonts/STHeiti Medium.ttc',
         '/System/Library/Fonts/Hiragino Sans GB.ttc',
-        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc', '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
-        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc', '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
     ]
     for candidate in candidates:
         if not candidate or not Path(candidate).is_file():
@@ -102,7 +106,12 @@ def _crop_box(crop, sw, sh):
     """Normalised user crop to source pixels; None keeps the whole frame."""
     if crop is None:
         return 0.0, 0.0, float(sw), float(sh)
-    return crop['x'] * sw, crop['y'] * sh, min(crop['width'], 1 - crop['x']) * sw, min(crop['height'], 1 - crop['y']) * sh
+    return (
+        crop['x'] * sw,
+        crop['y'] * sh,
+        min(crop['width'], 1 - crop['x']) * sw,
+        min(crop['height'], 1 - crop['y']) * sh,
+    )
 
 
 def _cover(box, ratio):
@@ -140,8 +149,14 @@ def _check_crop(c):
         raise ValueError('裁剪参数无效')
     if any(type(v) not in (int, float) or not math.isfinite(v) for v in c.values()):
         raise ValueError('裁剪参数无效')
-    if c['x'] < 0 or c['y'] < 0 or c['width'] <= 0 or c['height'] <= 0 \
-            or c['x'] + c['width'] > 1.000001 or c['y'] + c['height'] > 1.000001:
+    if (
+        c['x'] < 0
+        or c['y'] < 0
+        or c['width'] <= 0
+        or c['height'] <= 0
+        or c['x'] + c['width'] > 1.000001
+        or c['y'] + c['height'] > 1.000001
+    ):
         raise ValueError('裁剪区域超出原图')
     return c
 
@@ -164,8 +179,12 @@ def clean_draft(draft):
     if not isinstance(draft, dict):
         raise ValueError('拼图草稿无效')
     ids, crops, notes = draft.get('ids', []), draft.get('crops', {}), draft.get('notes', {})
-    if not isinstance(ids, list) or not isinstance(crops, dict) or not isinstance(notes, dict) \
-            or max(len(ids), len(crops), len(notes)) > DRAFT_LIMIT:
+    if (
+        not isinstance(ids, list)
+        or not isinstance(crops, dict)
+        or not isinstance(notes, dict)
+        or max(len(ids), len(crops), len(notes)) > DRAFT_LIMIT
+    ):
         raise ValueError('拼图草稿无效')
     keys = [_draft_key(k) for k in ids]
     if len(set(keys)) != len(keys):
@@ -215,9 +234,13 @@ def validate_options(payload, ids):
 def page_payload(payload, page_ids, page):
     """The single page request for one page of a multi-page batch."""
     keep = {str(i) for i in page_ids}
-    return {**payload, 'ids': page_ids, 'page': page,
-            'crops': {k: v for k, v in payload.get('crops', {}).items() if k in keep},
-            'notes': {k: v for k, v in payload.get('notes', {}).items() if k in keep}}
+    return {
+        **payload,
+        'ids': page_ids,
+        'page': page,
+        'crops': {k: v for k, v in payload.get('crops', {}).items() if k in keep},
+        'notes': {k: v for k, v in payload.get('notes', {}).items() if k in keep},
+    }
 
 
 def _label(payload, source, position):
@@ -260,8 +283,10 @@ def plan(payload, sources):
     # Rounded corners only make sense with a gap: touching tiles would show notches of background.
     radius = 0 if original or not gap else round(width * RADII[payload.get('radius', 'none')])
     shadow = not original and payload.get('shadow', False)
-    boxes = [(0.0, 0.0, float(sw), float(sh)) if original else _crop_box(crops.get(str(s['id'])), sw, sh)
-             for s, (sw, sh) in zip(sources, dimensions)]
+    boxes = [
+        (0.0, 0.0, float(sw), float(sh)) if original else _crop_box(crops.get(str(s['id'])), sw, sh)
+        for s, (sw, sh) in zip(sources, dimensions)
+    ]
     background = BACKGROUNDS[payload.get('background', 'white')]
     light = sum(background) > 384
     text_color = '#1f2937' if light else '#f3f4f6'
@@ -272,7 +297,7 @@ def plan(payload, sources):
     first_number = (payload.get('page', 1) - 1) * capacity + 1
     labels = ['' if original else _label(payload, s, first_number + n) for n, s in enumerate(sources)]
     notes = ['' if original else payload.get('notes', {}).get(str(s['id']), '').strip() for s in sources]
-    band_size = max(12, round(width * .011))
+    band_size = max(12, round(width * 0.011))
     has_band = any(notes) or (position == 'below' and any(labels))
     band = round(band_size * 2.1) if has_band else 0
 
@@ -280,11 +305,11 @@ def plan(payload, sources):
     title = None
     top = gap
     if title_text:
-        size = max(16, round(width * .024))
-        pad = max(gap, round(size * .6))
+        size = max(16, round(width * 0.024))
+        pad = max(gap, round(size * 0.6))
         line = round(size * 1.6)
-        title = dict(text=title_text, x=max(gap, round(size * .6)), y=pad + line // 2, size=size)
-        top = pad + line + max(gap, round(size * .5))
+        title = dict(text=title_text, x=max(gap, round(size * 0.6)), y=pad + line // 2, size=size)
+        top = pad + line + max(gap, round(size * 0.5))
 
     inner = width - 2 * gap
     cells = []
@@ -341,42 +366,75 @@ def plan(payload, sources):
         below = None
         if band:
             text_label = labels[n] if position == 'below' else ''
-            room = cw - round(band_size * .2)
+            room = cw - round(band_size * 0.2)
             text_label = ellipsize(text_label, band_size, room)
-            used = text_width(text_label, band_size) + (round(band_size * .8) if text_label else 0)
-            below = dict(x=x, y=y0 + ch, width=cw, height=band, size=band_size,
-                         label=text_label, note=ellipsize(notes[n], band_size, max(0, room - used)),
-                         note_x=x + used)
+            used = text_width(text_label, band_size) + (round(band_size * 0.8) if text_label else 0)
+            below = dict(
+                x=x,
+                y=y0 + ch,
+                width=cw,
+                height=band,
+                size=band_size,
+                label=text_label,
+                note=ellipsize(notes[n], band_size, max(0, room - used)),
+                note_x=x + used,
+            )
         overlay = '' if position == 'below' else labels[n]
-        items.append({k: s[k] for k in ('id', 'src', 'thumb')} | dict(
-            source_width=sw, source_height=sh,
-            crop=dict(x=crop[0], y=crop[1], width=crop[2], height=crop[3]),
-            target=dict(x=tx, y=ty, width=tw, height=th),
-            cell=dict(x=x, y=y0, width=cw, height=ch),
-            radius=min(radius, tw // 2, th // 2),
-            caption=overlay, caption_size=0, caption_position=position, below=below))
+        items.append(
+            {k: s[k] for k in ('id', 'src', 'thumb')}
+            | dict(
+                source_width=sw,
+                source_height=sh,
+                crop=dict(x=crop[0], y=crop[1], width=crop[2], height=crop[3]),
+                target=dict(x=tx, y=ty, width=tw, height=th),
+                cell=dict(x=x, y=y0, width=cw, height=ch),
+                radius=min(radius, tw // 2, th // 2),
+                caption=overlay,
+                caption_size=0,
+                caption_position=position,
+                below=below,
+            )
+        )
     # One caption size for the whole board, from the typical tile rather than each tile.
     if any(i['caption'] for i in items):
-        size = max(12, round(median(min(i['target']['width'], i['target']['height'] * 16 / 9) for i in items) * .04))
+        size = max(12, round(median(min(i['target']['width'], i['target']['height'] * 16 / 9) for i in items) * 0.04))
         for i in items:
             if i['caption']:
                 i['caption_size'] = _caption_fit(i['caption'], size, i['target']['width'])
 
     memory = width * height * 8 + max(sw * sh for sw, sh in dimensions) * 12
     safe = width * height <= MAX_PIXELS and memory <= MAX_MEMORY
-    enlarged = any(i['target']['width'] > i['crop']['width'] + 1 or i['target']['height'] > i['crop']['height'] + 1
-                   for i in items)
+    enlarged = any(
+        i['target']['width'] > i['crop']['width'] + 1 or i['target']['height'] > i['crop']['height'] + 1 for i in items
+    )
     warning = '部分画面将被放大，放大不会增加原图细节。' if enlarged else ''
     if (title or any(i['caption'] or i['below'] for i in items)) and not font_path():
         warning += '未找到中文字体，中文文字可能显示为方框；可把字体文件放入 fonts 文件夹。'
     first = cells[0] if cells else (0, 0, 0, w, h)
-    return dict(width=width, height=height, layout=layout, rows=rows, per_page=capacity, columns=columns,
-                cell_width=first[3], image_height=first[4], caption_height=band, gap=gap, radius=radius,
-                radius_disabled=not original and not gap and payload.get('radius', 'none') != 'none',
-                shadow=shadow, shadow_blur=max(4, round(width * .006)) if shadow else 0,
-                background='#%02x%02x%02x' % background, text_color=text_color, muted_color=muted_color,
-                title=title, items=items, estimated_memory_bytes=memory, can_render=safe,
-                warning=warning if safe else '图片过大，超过4000万像素或512MB内存预算，请降低输出宽度或减少每张张数')
+    return dict(
+        width=width,
+        height=height,
+        layout=layout,
+        rows=rows,
+        per_page=capacity,
+        columns=columns,
+        cell_width=first[3],
+        image_height=first[4],
+        caption_height=band,
+        gap=gap,
+        radius=radius,
+        radius_disabled=not original and not gap and payload.get('radius', 'none') != 'none',
+        shadow=shadow,
+        shadow_blur=max(4, round(width * 0.006)) if shadow else 0,
+        background='#%02x%02x%02x' % background,
+        text_color=text_color,
+        muted_color=muted_color,
+        title=title,
+        items=items,
+        estimated_memory_bytes=memory,
+        can_render=safe,
+        warning=warning if safe else '图片过大，超过4000万像素或512MB内存预算，请降低输出宽度或减少每张张数',
+    )
 
 
 def _rounded_mask(size, radius):
@@ -396,8 +454,11 @@ def _draw_shadows(canvas, plan):
     offset = blur // 2
     for item in plan['items']:
         t = item['target']
-        draw.rounded_rectangle((t['x'], t['y'] + offset, t['x'] + t['width'] - 1, t['y'] + t['height'] - 1 + offset),
-                               item['radius'], fill=90)
+        draw.rounded_rectangle(
+            (t['x'], t['y'] + offset, t['x'] + t['width'] - 1, t['y'] + t['height'] - 1 + offset),
+            item['radius'],
+            fill=90,
+        )
     alpha = alpha.filter(ImageFilter.GaussianBlur(blur))
     canvas.paste((0, 0, 0), mask=alpha)
 
@@ -406,10 +467,10 @@ def caption_box(item):
     """Where the on-photo label pill goes; shared with the browser preview through the plan."""
     size = item['caption_size']
     t = item['target']
-    pad_x, pad_y = round(size * .5), round(size * .3)
+    pad_x, pad_y = round(size * 0.5), round(size * 0.3)
     box_w = min(t['width'], text_width(item['caption'], size) + pad_x * 2)
     box_h = size + pad_y * 2
-    margin = round(size * .45)
+    margin = round(size * 0.45)
     right = item['caption_position'] in ('tr', 'br')
     bottom = item['caption_position'] in ('bl', 'br')
     x = t['x'] + t['width'] - margin - box_w if right else t['x'] + margin
@@ -421,13 +482,15 @@ def _draw_caption(canvas, item):
     size = item['caption_size']
     t = item['target']
     x, y, box_w, box_h, pad_x = caption_box(item)
-    if box_w + round(size * .45) > t['width'] or box_h + round(size * .45) > t['height']:
+    if box_w + round(size * 0.45) > t['width'] or box_h + round(size * 0.45) > t['height']:
         return
     region = canvas.crop((x, y, x + box_w, y + box_h)).convert('RGBA')
     layer = Image.new('RGBA', region.size, (0, 0, 0, 0))
     ImageDraw.Draw(layer).rounded_rectangle((0, 0, box_w - 1, box_h - 1), round(box_h / 3), fill=(15, 23, 42, 150))
     region = Image.alpha_composite(region, layer)
-    ImageDraw.Draw(region).text((pad_x, box_h / 2), item['caption'], font=font(size), fill=(255, 255, 255, 255), anchor='lm')
+    ImageDraw.Draw(region).text(
+        (pad_x, box_h / 2), item['caption'], font=font(size), fill=(255, 255, 255, 255), anchor='lm'
+    )
     canvas.paste(region.convert('RGB'), (x, y))
 
 
@@ -469,7 +532,9 @@ def render(plan, sources, payload, path, preview):
                 _draw_below(canvas, item, plan)
         if plan['title']:
             t = plan['title']
-            ImageDraw.Draw(canvas).text((t['x'], t['y']), t['text'], font=font(t['size']), fill=plan['text_color'], anchor='lm')
+            ImageDraw.Draw(canvas).text(
+                (t['x'], t['y']), t['text'], font=font(t['size']), fill=plan['text_color'], anchor='lm'
+            )
         fmt = payload.get('format', 'png')
         options = {} if fmt == 'png' else {'quality': 95, 'subsampling': 0}
         canvas.save(path, format='PNG' if fmt == 'png' else 'JPEG', **options)
@@ -492,8 +557,11 @@ def storyboard_csv(payload, cuts):
     for n, i in enumerate(ids, 1):
         cut = cuts[i]
         crop = crops.get(str(i))
-        crop_text = '' if not crop or payload.get('mode') == 'original' else \
-            '左{:.0%} 上{:.0%} 宽{:.0%} 高{:.0%}'.format(crop['x'], crop['y'], crop['width'], crop['height'])
+        crop_text = (
+            ''
+            if not crop or payload.get('mode') == 'original'
+            else '左{:.0%} 上{:.0%} 宽{:.0%} 高{:.0%}'.format(crop['x'], crop['y'], crop['width'], crop['height'])
+        )
         note = notes.get(str(i), '').strip()
         if note[:1] in ('=', '+', '-', '@'):
             note = "'" + note  # keep spreadsheets from treating a note as a formula

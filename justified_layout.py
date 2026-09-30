@@ -4,6 +4,7 @@ Copyright 2019 SmugMug, Inc. MIT License, see static/vendor/justified-layout-LIC
 Only the decision of which items share a row is ported; the collage computes exact,
 uncropped row geometry itself so every photo keeps its aspect ratio.
 """
+
 import math
 
 

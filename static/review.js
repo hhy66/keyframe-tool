@@ -4,11 +4,13 @@ const Review = {
   similarToken: 0,
   flagged: [],
 
-  el(selector) { return document.querySelector(selector); },
+  el(selector) {
+    return document.querySelector(selector);
+  },
 
   // Screenshots whose similarity to the previous one reaches the threshold (pure, for tests).
   flags(scores, threshold) {
-    return scores.flatMap((score, i) => score != null && score >= threshold ? [i] : []);
+    return scores.flatMap((score, i) => (score != null && score >= threshold ? [i] : []));
   },
 
   async loadSimilar(res) {
@@ -19,7 +21,9 @@ const Review = {
     let data;
     try {
       data = await jsonRequest(`/api/similar/${encodeURIComponent(state.sid)}?run=${encodeURIComponent(res.run)}`);
-    } catch { return; }   // 提示只是辅助，读取失败不影响挑选
+    } catch {
+      return;
+    } // 提示只是辅助，读取失败不影响挑选
     if (token !== this.similarToken || state.resultRun !== res.run) return;
     this.flagged = this.flags(data.scores || [], data.threshold ?? 80);
     this.paintSimilar(Object.fromEntries(this.flagged.map(i => [i, data.scores[i]])));
@@ -71,10 +75,17 @@ const Review = {
   blocked(event) {
     const target = event.target;
     if (event.ctrlKey || event.metaKey || event.altKey) return true;
-    if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) && target.type !== 'checkbox')) return true;
+    if (
+      target &&
+      (target.isContentEditable ||
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) && target.type !== 'checkbox'))
+    )
+      return true;
     // Other panels own the keyboard while they are open.
-    return ['#collagePanel', '#storageManager', '#dl'].some(selector => this.el(selector) && !this.el(selector).hidden)
-      || this.el('#cardResult').hidden;
+    return (
+      ['#collagePanel', '#storageManager', '#dl'].some(selector => this.el(selector) && !this.el(selector).hidden) ||
+      this.el('#cardResult').hidden
+    );
   },
 
   onKey(event) {
@@ -85,13 +96,21 @@ const Review = {
     if (lightbox) {
       if (key === 'ArrowRight' || key === 'ArrowLeft') {
         const next = Math.max(0, Math.min(count - 1, (state.lbIndex ?? 0) + (key === 'ArrowRight' ? 1 : -1)));
-        openLb(next); this.setCursor(next); event.preventDefault();
+        openLb(next);
+        this.setCursor(next);
+        event.preventDefault();
       } else if (key === ' ') {
-        state.cards[state.lbIndex]?.toggle(); event.preventDefault();
+        state.cards[state.lbIndex]?.toggle();
+        event.preventDefault();
       }
       return;
     }
-    if (key === '?') { const help = this.el('#shortcutHelp'); help.open = !help.open; event.preventDefault(); return; }
+    if (key === '?') {
+      const help = this.el('#shortcutHelp');
+      help.open = !help.open;
+      event.preventDefault();
+      return;
+    }
     if (!count) return;
     const moves = {ArrowRight: 1, ArrowLeft: -1, ArrowDown: this.columns(), ArrowUp: -this.columns()};
     if (key in moves) {
@@ -100,9 +119,16 @@ const Review = {
       return;
     }
     if (state.cursor == null) return;
-    if (key === ' ' || key === 'x' || key === 'X') { state.cards[state.cursor].toggle(); event.preventDefault(); }
-    else if (key === 'Enter') { openLb(state.cursor); event.preventDefault(); }
-    else if ((key === 'e' || key === 'E') && !state.cards[state.cursor].edit.disabled) { state.cards[state.cursor].edit.click(); event.preventDefault(); }
+    if (key === ' ' || key === 'x' || key === 'X') {
+      state.cards[state.cursor].toggle();
+      event.preventDefault();
+    } else if (key === 'Enter') {
+      openLb(state.cursor);
+      event.preventDefault();
+    } else if ((key === 'e' || key === 'E') && !state.cards[state.cursor].edit.disabled) {
+      state.cards[state.cursor].edit.click();
+      event.preventDefault();
+    }
   },
 };
 

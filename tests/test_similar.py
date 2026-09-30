@@ -1,4 +1,5 @@
 """Hints for near-duplicate screenshots: each result compared with the one before it."""
+
 import tempfile
 import threading
 import unittest
@@ -17,8 +18,10 @@ class SimilarTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.patches = [patch.object(server, 'WORK', self.root),
-                        patch.object(server, '_storage', storage_manager.Manager(server))]
+        self.patches = [
+            patch.object(server, 'WORK', self.root),
+            patch.object(server, '_storage', storage_manager.Manager(server)),
+        ]
         for p in self.patches:
             p.start()
         server._similar_cache.clear()
@@ -28,13 +31,16 @@ class SimilarTests(unittest.TestCase):
         other = rng.integers(0, 255, (90, 160, 3), dtype=np.uint8)
         images = [base, noisy, other, other]
         for i, image in enumerate(images):
-            folder = 'thumbs' if i != 3 else 'frames'   # the last one has no thumbnail: falls back to the full frame
+            folder = 'thumbs' if i != 3 else 'frames'  # the last one has no thumbnail: falls back to the full frame
             path = self.root / 's1' / folder / 'r1' / f'{i}.jpg'
             path.parent.mkdir(parents=True, exist_ok=True)
             Image.fromarray(image).save(path, quality=95)
         cuts = [{'kind': 'cut', 'frame_index': i * 10, 'label': ''} for i in range(5)]
-        server._sessions['s1'] = {'results': {'r1': {'run': 'r1', 'cuts': cuts}}, 'latest_run': 'r1',
-                                  'worker_lock': threading.Lock()}
+        server._sessions['s1'] = {
+            'results': {'r1': {'run': 'r1', 'cuts': cuts}},
+            'latest_run': 'r1',
+            'worker_lock': threading.Lock(),
+        }
 
     def tearDown(self):
         server._sessions.clear()
@@ -47,11 +53,11 @@ class SimilarTests(unittest.TestCase):
         out = server.similar('s1', 'r1')
         scores = out['scores']
         self.assertIsNone(scores[0])
-        self.assertGreaterEqual(scores[1], out['threshold'])   # same picture with a little noise
-        self.assertLess(scores[2], out['threshold'])            # a different picture
-        self.assertGreaterEqual(scores[3], 95)                   # identical, read from the full frame
-        self.assertIsNone(scores[4])                             # missing image gives no score
-        self.assertIs(server.similar('s1', 'r1'), out)           # cached per result
+        self.assertGreaterEqual(scores[1], out['threshold'])  # same picture with a little noise
+        self.assertLess(scores[2], out['threshold'])  # a different picture
+        self.assertGreaterEqual(scores[3], 95)  # identical, read from the full frame
+        self.assertIsNone(scores[4])  # missing image gives no score
+        self.assertIs(server.similar('s1', 'r1'), out)  # cached per result
 
     def test_unknown_result(self):
         with self.assertRaises(HTTPException):

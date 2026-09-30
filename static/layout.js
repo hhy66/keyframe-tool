@@ -11,10 +11,18 @@ function layoutNavState(page) {
     workspace: on(page.workspaceCount ? `${page.workspaceCount} 条记录` : ''),
     upload: on(page.videoName || '尚未选择'),
     params: page.paramsVisible ? on(page.sens) : off('先选择视频'),
-    progress: page.running ? on(`分析中 ${page.progress}%`, true) : page.progressVisible ? on(page.progressText) : off('当前没有进行中的分析'),
+    progress: page.running
+      ? on(`分析中 ${page.progress}%`, true)
+      : page.progressVisible
+        ? on(page.progressText)
+        : off('当前没有进行中的分析'),
     editor: page.editorVisible ? on() : off('分析完成后可用'),
     results: page.resultVisible ? on(`${page.total} 张 · 选中 ${page.selected}`) : off('还没有结果'),
-    download: !page.resultVisible ? off('还没有结果') : page.downloadEnabled ? on(`${page.selected} 张`) : off('请先选中要下载的关键帧'),
+    download: !page.resultVisible
+      ? off('还没有结果')
+      : page.downloadEnabled
+        ? on(`${page.selected} 张`)
+        : off('请先选中要下载的关键帧'),
     collage: page.resultVisible ? on() : off('还没有结果'),
     storage: on(),
   };
@@ -22,16 +30,24 @@ function layoutNavState(page) {
 
 const Layout = {
   lastSid: null,
-  el(selector) { return document.querySelector(selector); },
-  shown(selector) { const el = this.el(selector); return !!el && !el.hidden; },
-  wide() { return window.matchMedia(LAYOUT_WIDE).matches; },
+  el(selector) {
+    return document.querySelector(selector);
+  },
+  shown(selector) {
+    const el = this.el(selector);
+    return !!el && !el.hidden;
+  },
+  wide() {
+    return window.matchMedia(LAYOUT_WIDE).matches;
+  },
 
   snapshot() {
     const text = selector => (this.el(selector)?.textContent || '').trim();
     const width = parseFloat(this.el('#bar')?.style.width) || 0;
     return {
       videoName: typeof state !== 'undefined' && state.sid ? text('#mName') : '',
-      workspaceCount: this.el('#workspaceList')?.hidden === false ? this.el('#workspaceList').querySelectorAll('.toolbar').length : 0,
+      workspaceCount:
+        this.el('#workspaceList')?.hidden === false ? this.el('#workspaceList').querySelectorAll('.toolbar').length : 0,
       paramsVisible: this.shown('#cardParams'),
       sens: text('#sensVal'),
       progressVisible: this.shown('#cardProgress'),
@@ -75,17 +91,24 @@ const Layout = {
     if (!target || target.hidden) return;
     target.scrollIntoView({behavior: 'smooth', block: 'start'});
     target.classList.remove('flash');
-    void target.offsetWidth;  // restart the highlight animation
+    void target.offsetWidth; // restart the highlight animation
     target.classList.add('flash');
   },
 
   navigate(key) {
-    const sections = {upload: '#cardUpload', params: '#cardParams', progress: '#cardProgress',
-      editor: '#cardEditor', results: '#cardResult'};
+    const sections = {
+      upload: '#cardUpload',
+      params: '#cardParams',
+      progress: '#cardProgress',
+      editor: '#cardEditor',
+      results: '#cardResult',
+    };
     const actions = {download: '#btnDownload', collage: '#btnCollage', storage: '#btnStorage'};
     this.closeDrawer();
-    if (key === 'workspace') { this.setWorkspace(true); this.reveal('#cardWorkspace'); }
-    else if (sections[key]) this.reveal(sections[key]);
+    if (key === 'workspace') {
+      this.setWorkspace(true);
+      this.reveal('#cardWorkspace');
+    } else if (sections[key]) this.reveal(sections[key]);
     else if (actions[key]) this.el(actions[key]).click();
     if (key === 'upload') this.el('#drop').focus({preventScroll: true});
   },
@@ -94,7 +117,11 @@ const Layout = {
     document.body.classList.toggle('navCollapsed', collapsed);
     this.el('#navToggle').setAttribute('aria-expanded', String(!collapsed));
     if (remember) {
-      try { localStorage.setItem(LAYOUT_NAV_KEY, collapsed ? '1' : '0'); } catch { /* 仅本次有效 */ }
+      try {
+        localStorage.setItem(LAYOUT_NAV_KEY, collapsed ? '1' : '0');
+      } catch {
+        /* 仅本次有效 */
+      }
     }
   },
   openDrawer() {
@@ -110,7 +137,11 @@ const Layout = {
 
   init() {
     let saved = null;
-    try { saved = localStorage.getItem(LAYOUT_NAV_KEY); } catch { /* 默认展开 */ }
+    try {
+      saved = localStorage.getItem(LAYOUT_NAV_KEY);
+    } catch {
+      /* 默认展开 */
+    }
     // First visit: show labels when there is room for them, icons only on smaller screens.
     this.setCollapsed(saved === null ? window.innerWidth < 1400 : saved === '1', false);
     this.el('#navToggle').addEventListener('click', () => {
@@ -119,14 +150,19 @@ const Layout = {
     });
     this.el('#navFab').addEventListener('click', () => this.openDrawer());
     this.el('#navScrim').addEventListener('click', () => this.closeDrawer());
-    document.addEventListener('keydown', event => { if (event.key === 'Escape') this.closeDrawer(); });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') this.closeDrawer();
+    });
     for (const button of document.querySelectorAll('[data-nav]')) {
       button.addEventListener('click', () => this.navigate(button.dataset.nav));
     }
     this.el('#workspaceToggle').addEventListener('click', () =>
-      this.setWorkspace(this.el('#cardWorkspace').classList.contains('collapsed')));
+      this.setWorkspace(this.el('#cardWorkspace').classList.contains('collapsed')),
+    );
     this.render();
-    setInterval(() => { if (!document.hidden) this.render(); }, 500);
+    setInterval(() => {
+      if (!document.hidden) this.render();
+    }, 500);
   },
 };
 

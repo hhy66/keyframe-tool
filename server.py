@@ -10,9 +10,9 @@
 全部处理在本地完成，不上传任何数据。无需安装 ffmpeg（OpenCV 自带解码）。
 运行方式：双击「启动工具.bat」，或 .venv\\Scripts\\python.exe server.py
 """
+
 from __future__ import annotations
 
-from array import array
 import math
 import os
 import shutil
@@ -30,6 +30,26 @@ import workspace_store
 import storage_manager
 from functools import wraps
 from runtime_compat import lifespan
+from detection import (  # noqa: F401  检测算法独立成模块，这里保留原名供接口与测试使用
+    PICKS,
+    SCAN_WIDTH,
+    SETTLE_SECONDS,
+    SHARP_WINDOW,
+    _Cancelled,
+    _fmt_time,
+    _fps,
+    _grab_frame_at,
+    _mad,
+    _pick_frame,
+    _scan_pass1,
+    _select_entries,
+    _sharpness,
+    _signature,
+    _similarity,
+    _small_color,
+    _write_jpeg,
+    probe,
+)
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -46,17 +66,15 @@ WORK = APP_DIR / "work"
 STATIC = BASE / "static"
 WORK.mkdir(exist_ok=True)
 
-ALLOWED_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v",
-               ".ts", ".flv", ".wmv", ".mpg", ".mpeg", ".3gp", ".ogv"}
+ALLOWED_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg", ".mpeg", ".3gp", ".ogv"}
 
-SCAN_WIDTH = 160          # 检测小图最长边；横竖屏均有界
-MAX_EXPORT = 500          # 单次打包上限
+MAX_EXPORT = 500  # 单次打包上限
 
 app = FastAPI(title="视频关键帧截取工具", lifespan=lifespan)
 
 _lock = threading.RLock()
-_sessions: dict[str, dict] = {}   # session_id -> {video_path, video_name, meta, cache}
-_jobs: dict[str, dict] = {}       # session_id -> job
+_sessions: dict[str, dict] = {}  # session_id -> {video_path, video_name, meta, cache}
+_jobs: dict[str, dict] = {}  # session_id -> job
 
 
 def _storage_guard(fn):
@@ -67,6 +85,7 @@ def _storage_guard(fn):
             for sid in list(_sessions):
                 _collect_garbage(sid)
             return fn(*args, **kwargs)
+
     return guarded
 
 
@@ -74,225 +93,15 @@ def _file_response(sid, path, **kwargs):
     return _storage.lease(sid, FileResponse(path, **kwargs))
 
 
-class _Cancelled(Exception):
-    pass
-
-
 def _collect_garbage(sid):
     ses = _sessions.get(sid)
-    if not ses or not ses.get('pending_delete') or _storage.active.get(sid,0): return
+    if not ses or not ses.get('pending_delete') or _storage.active.get(sid, 0):
+        return
     try:
-        workspace_store.collect_retired(WORK,sid,ses)
+        workspace_store.collect_retired(WORK, sid, ses)
         ses['cleanup_warning'] = '旧图被占用，稍后自动清理' if ses.get('pending_delete') else ''
-    except (OSError,ValueError):
+    except (OSError, ValueError):
         ses['cleanup_warning'] = '旧图暂未清理，将在下次访问时重试'
-
-
-# ---------------------------------------------------------------- 基础工具
-
-def _small_color(frame):
-    """保留颜色差异，先缩小再比较；不放大小视频。"""
-    h, w = frame.shape[:2]
-    scale = min(1.0, SCAN_WIDTH / max(h, w))
-    return cv2.resize(frame, (max(1, round(w * scale)), max(1, round(h * scale))),
-                      interpolation=cv2.INTER_AREA)
-
-
-def _mad(a, b):
-    """小图所有颜色通道的平均绝对差（0~255）。"""
-    return float(np.mean(cv2.absdiff(a, b)))
-
-
-def _fmt_time(t):
-    t = max(0.0, t)
-    h = int(t // 3600)
-    m = int(t % 3600 // 60)
-    s = t - h * 3600 - m * 60
-    return f"{h:02d}:{m:02d}:{s:06.3f}"
-
-
-def _grab_frame_at(cap, target_frame):
-    """读取指定的零基帧编号，不增加时间偏移，不用末帧掩盖读取失败。"""
-    target_frame = int(target_frame)
-    if not cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame):
-        return None
-    # POS_FRAMES 表示下一次 read 的帧号；某些后端可能定位到更早的帧。
-    position = cap.get(cv2.CAP_PROP_POS_FRAMES)
-    if not math.isfinite(position) or position > target_frame + 0.5:
-        return None
-    for _ in range(max(0, target_frame - round(position))):
-        if not cap.grab():
-            return None
-    ok, frame = cap.read()
-    return frame if ok else None
-
-
-PICKS = ("first", "settle", "sharp")
-SETTLE_SECONDS = 0.5   # “切换后 0.5 秒”：避开切换瞬间的残影和压缩块
-SHARP_WINDOW = 1.5     # “最清晰”：只在镜头开头这段时间内挑选
-
-
-def _sharpness(frame):
-    """拉普拉斯方差：数值越大画面越清晰。缩到最长边 320 以控制耗时。"""
-    h, w = frame.shape[:2]
-    scale = min(1.0, 320 / max(h, w))
-    small = cv2.resize(frame, (max(1, round(w * scale)), max(1, round(h * scale))), interpolation=cv2.INTER_AREA)
-    return float(cv2.Laplacian(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
-
-
-def _pick_frame(cap, start, stop, pick, fps):
-    """按截取策略选出镜头 [start, stop] 中的一帧，返回 (帧号, 图像)；读取失败时图像为 None。"""
-    if pick == "settle":
-        target = max(start, min(stop, start + round(SETTLE_SECONDS * fps)))
-        return target, _grab_frame_at(cap, target)
-    first = _grab_frame_at(cap, start)
-    if pick != "sharp" or first is None:
-        return start, first
-    best_score, best_index, best = _sharpness(first), start, first
-    for index in range(start + 1, min(stop, start + max(1, round(SHARP_WINDOW * fps))) + 1):
-        ok, frame = cap.read()
-        if not ok:
-            break
-        score = _sharpness(frame)
-        # 需要明显更清晰才换，避免在噪点上来回跳，也尽量靠近切换点。
-        if score > best_score * 1.05:
-            best_score, best_index, best = score, index, frame
-    return best_index, best
-
-
-def _write_jpeg(path, frame, quality):
-    # imencode + Python 文件 I/O 同时支持 Windows 中文路径，并检查编码/写入错误。
-    ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
-    if not ok:
-        raise RuntimeError("图片编码失败")
-    path.write_bytes(encoded.tobytes())
-
-
-def _fps(cap):
-    value = cap.get(cv2.CAP_PROP_FPS)
-    return float(value) if math.isfinite(value) and 0 < value <= 1000 else 30.0
-
-
-def probe(path: Path):
-    """读取视频基本信息；无法解码时返回 None。"""
-    cap = cv2.VideoCapture(str(path))
-    if not cap.isOpened():
-        return None
-    fps = _fps(cap)
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    ok, _ = cap.read()
-    cap.release()
-    if not ok or w <= 0 or h <= 0:
-        return None
-    return {"fps": float(fps), "frames": total, "width": w, "height": h,
-            "duration": (total / fps) if total else 0.0}
-
-
-# ---------------------------------------------------------------- 检测算法
-
-def _scan_pass1(video_path: str, job: dict, cache: dict):
-    """边解码边计算差异，只保留两张小图和紧凑的每帧数值数组。"""
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError("无法解码该视频（编码可能不支持）")
-    fps = _fps(cap)
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    times, diffs, bridges = array("d"), array("f"), array("f")
-    prev = before_prev = None
-    estimated_time = False
-    n = 0
-    try:
-        while True:
-            if job.get("cancel"):
-                raise _Cancelled()
-            ok, frame = cap.read()
-            if not ok:
-                break
-            timestamp = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-            if not math.isfinite(timestamp) or timestamp < 0 or (times and timestamp <= times[-1]):
-                timestamp = times[-1] + 1 / fps if times else 0.0
-                estimated_time = True
-            times.append(timestamp)
-            small = _small_color(frame)
-            diffs.append(_mad(prev, small) if prev is not None else 0.0)
-            bridges.append(_mad(before_prev, small) if before_prev is not None else 255.0)
-            before_prev, prev = prev, small
-            n += 1
-            if n % 150 == 0:
-                pct = 5 + 62 * (n / max(1, total))
-                job["pct"] = min(pct, 66.0)
-                job["stage"] = f"扫描画面差异… {n:,}/{total:,} 帧"
-    finally:
-        cap.release()
-
-    if n == 0:
-        raise RuntimeError("视频没有任何可解码的帧")
-    # 容器帧数可能有少量估算误差，但明显缺帧不能当作完整视频发布。
-    if total > 0 and total - n > max(2, math.ceil(total * 0.01)):
-        raise RuntimeError(f"视频解码提前结束（预计 {total} 帧，实际 {n} 帧），文件可能损坏；已保留上次结果")
-    cache.update({
-        "fps": float(fps),
-        "frames": n,
-        "times": np.frombuffer(times, dtype=np.float64),
-        "diffs": np.frombuffer(diffs, dtype=np.float32),
-        "bridges": np.frombuffer(bridges, dtype=np.float32),
-        "estimated_time": estimated_time,
-    })
-    return True
-
-
-def _select_entries(video_path: str, job: dict, ses: dict):
-    """使用缓存挑选切换帧，返回 [(kind, frame_index)]，无需再次解码。"""
-    cache = ses["cache"]
-    diffs = cache["diffs"]
-    fps = cache["fps"]
-    sens = job["sensitivity"]
-    mult = 8.0 - sens / 100.0 * 6.0          # 0=保守(阈值高) 100=敏感(阈值低)
-    med = float(np.median(diffs[1:])) if len(diffs) > 1 else 0.0
-    base = med
-    if base < 0.5:                            # 画面基本静止的视频，基准抬高一点
-        base = max(float(np.percentile(diffs, 65)), 0.5)
-    thr = max(base * mult, 2.0)
-
-    candidates = diffs > thr
-    candidates[0] = False
-    if job.get("suppress_flash", True) and len(diffs) > 2:
-        # A -> 闪光 -> A：相邻两次突变很强，但跨过闪光后与原画面接近。
-        flashes = np.flatnonzero(candidates[1:-1] & candidates[2:] &
-                                 (cache["bridges"][2:] < np.maximum(2.0, np.minimum(diffs[1:-1], diffs[2:]) * 0.25))) + 1
-        candidates[flashes] = False
-        candidates[flashes + 1] = False
-    times = cache["times"]
-    exact = []
-    gap = job.get("min_scene_seconds", 0.1)
-    # 按时间线性筛选，避免原来的两两比较开销；同一邻近峰群保留更强的一帧。
-    for index in np.flatnonzero(candidates):
-        i = int(index)
-        if job.get("cancel"):
-            raise _Cancelled()
-        if exact and times[i] - times[exact[-1]] < gap - 1e-8:
-            if diffs[i] > diffs[exact[-1]]:
-                exact[-1] = i
-        else:
-            exact.append(i)
-
-    dur = float(times[-1] + 1 / fps)
-    entries = []
-    if job.get("include_ends"):
-        entries.append(("head", 0))
-    entries.extend(("cut", i) for i in exact)
-    if job.get("include_ends"):
-        tail = cache["frames"] - 1
-        if not entries or entries[-1][1] != tail:
-            entries.append(("tail", tail))
-    # 手动改动优先；重新检测只改变自动候选，不丢弃用户选定的画面。
-    adjustments = ses.get("manual_adjustments", {})
-    merged = {i: kind for kind, i in entries if i not in adjustments}
-    merged.update({i: "adjusted" for i in adjustments.values()})
-    merged.update({i: "manual" for i in ses.get("manual_additions", set())})
-    return [(kind, i) for i, kind in sorted(merged.items())], dur
 
 
 def _run_job(sid: str, job: dict, ses: dict) -> None:
@@ -322,9 +131,9 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
 
         cache = ses["cache"]
         run = job["run"]
-        workspace_store.begin_result(WORK,sid,run)
-        fdir = sdir / "frames" / run          # 原分辨率原图
-        tdir = sdir / "thumbs" / run          # 页面预览小图
+        workspace_store.begin_result(WORK, sid, run)
+        fdir = sdir / "frames" / run  # 原分辨率原图
+        tdir = sdir / "thumbs" / run  # 页面预览小图
         # 结果完成前不覆盖或删除已发布的图片，旧页面和下载仍可使用。
         fdir.mkdir(parents=True, exist_ok=True)
         tdir.mkdir(parents=True, exist_ok=True)
@@ -358,10 +167,16 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
                     prev = frame
                 _write_jpeg(tdir / f"{i}.jpg", prev, 85)
                 t = float(cache["times"][frame_index])
-                cut = {"kind": kind, "frame_index": frame_index, "time": round(t, 6),
-                       "label": _fmt_time(t), "asset_run":run, "file_index":i}
+                cut = {
+                    "kind": kind,
+                    "frame_index": frame_index,
+                    "time": round(t, 6),
+                    "label": _fmt_time(t),
+                    "asset_run": run,
+                    "file_index": i,
+                }
                 if kind in ("cut", "head"):
-                    cut["source_frame"] = source_frame   # 检测到的切换帧：跳过状态和微调按它对应
+                    cut["source_frame"] = source_frame  # 检测到的切换帧：跳过状态和微调按它对应
                 cuts.append(cut)
         finally:
             cap.release()
@@ -372,13 +187,17 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
         job["stage"] = "完成"
         fps_r = cache["fps"]
         result = {
-            "run": run, "created_at": storage_manager.now(), "action": "analysis",
+            "run": run,
+            "created_at": storage_manager.now(),
+            "action": "analysis",
             "video_name": ses["video_name"],
-            "params": {"sensitivity": job["sensitivity"],
-                       "include_ends": bool(job.get("include_ends")),
-                       "min_scene_seconds": job["min_scene_seconds"],
-                       "suppress_flash": job["suppress_flash"],
-                       "pick": job.get("pick", "first")},
+            "params": {
+                "sensitivity": job["sensitivity"],
+                "include_ends": bool(job.get("include_ends")),
+                "min_scene_seconds": job["min_scene_seconds"],
+                "suppress_flash": job["suppress_flash"],
+                "pick": job.get("pick", "first"),
+            },
             "meta": {
                 "width": ses["meta"].get("width"),
                 "height": ses["meta"].get("height"),
@@ -395,9 +214,11 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
         with _lock:
             if job.get("cancel") or _jobs.get(sid) is not job:
                 raise _Cancelled()
-            staged = workspace_store.current_update(ses,result)
+            staged = workspace_store.current_update(ses, result)
             _persist_session(sid, staged, result)
-            ses.update({key: staged[key] for key in ("cache_file", "latest_run", "updated_at", "results", "pending_delete")})
+            ses.update(
+                {key: staged[key] for key in ("cache_file", "latest_run", "updated_at", "results", "pending_delete")}
+            )
             job["result"] = result
             job["pct"] = 100.0
             job["status"] = "done"
@@ -405,7 +226,7 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
     except _Cancelled:
         job["status"] = "cancelled"
         job["stage"] = "已取消"
-    except Exception as exc:                  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         job["status"] = "error"
         job["stage"] = "失败"
         job["error"] = str(exc)
@@ -414,11 +235,14 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
             for directory in (fdir, tdir):
                 if directory is not None:
                     shutil.rmtree(directory, ignore_errors=True)
-        try:workspace_store.finish_result(WORK,sid,job['run'])
-        except OSError:pass
+        try:
+            workspace_store.finish_result(WORK, sid, job['run'])
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------- HTTP API
+
 
 def _persist_session(sid, ses, result=None):
     workspace_store.save(WORK, sid, ses, result)
@@ -442,15 +266,22 @@ def _session(sid):
     except (ValueError, OSError) as exc:
         raise HTTPException(422, str(exc)) from exc
     restored["worker_lock"] = threading.Lock()
-    workspace_store.recover_result(WORK,sid,restored)
+    workspace_store.recover_result(WORK, sid, restored)
     result = restored["results"].get(restored.get("latest_run"))
     params = result["params"] if result else dict(workspace_store.DEFAULT_PARAMS)
     with _lock:
         if sid not in _sessions:
             _sessions[sid] = restored
-            _jobs[sid] = dict(status="done" if result else "idle", pct=100.0 if result else 0.0,
-                              stage="已恢复", error=None, result=result, run=result["run"] if result else "",
-                              cancel=False, **params)
+            _jobs[sid] = dict(
+                status="done" if result else "idle",
+                pct=100.0 if result else 0.0,
+                stage="已恢复",
+                error=None,
+                result=result,
+                run=result["run"] if result else "",
+                cancel=False,
+                **params,
+            )
         _collect_garbage(sid)
         return _sessions[sid]
 
@@ -466,13 +297,30 @@ def workspace():
         try:
             ses = workspace_store.load(WORK, sid, load_cache=False)
             result = ses["results"].get(ses.get("latest_run"))
-            entries.append(dict(session_id=sid, video_name=ses["video_name"], updated_at=ses["updated_at"],
-                                frame_count=len(result["cuts"]) if result else 0, legacy=ses["legacy"],
-                                can_restore=True, note=ses.get("workspace_note", "")))
+            entries.append(
+                dict(
+                    session_id=sid,
+                    video_name=ses["video_name"],
+                    updated_at=ses["updated_at"],
+                    frame_count=len(result["cuts"]) if result else 0,
+                    legacy=ses["legacy"],
+                    can_restore=True,
+                    note=ses.get("workspace_note", ""),
+                )
+            )
         except (ValueError, OSError) as exc:
-            entries.append(dict(session_id=sid, video_name=sid, updated_at="", frame_count=0,
-                                legacy=False, can_restore=False, note=str(exc)))
-    entries.sort(key=lambda entry:entry["updated_at"] or "", reverse=True)
+            entries.append(
+                dict(
+                    session_id=sid,
+                    video_name=sid,
+                    updated_at="",
+                    frame_count=0,
+                    legacy=False,
+                    can_restore=False,
+                    note=str(exc),
+                )
+            )
+    entries.sort(key=lambda entry: entry["updated_at"] or "", reverse=True)
     return {"entries": entries, "path": str(WORK)}
 
 
@@ -494,8 +342,12 @@ def save_selection(sid: str, payload: dict):
         result = (_jobs.get(sid) or {}).get("result")
         if not result or payload.get("run") != result["run"]:
             raise HTTPException(409, "结果已更新，请刷新后再保存选择")
-        allowed = {c.get("source_frame", c["frame_index"]) if c["frame_index"] is not None else f"legacy:{result['run']}:{c.get('file_index', i)}"
-                   for i,c in enumerate(result["cuts"])}
+        allowed = {
+            c.get("source_frame", c["frame_index"])
+            if c["frame_index"] is not None
+            else f"legacy:{result['run']}:{c.get('file_index', i)}"
+            for i, c in enumerate(result["cuts"])
+        }
         if any(i not in allowed for i in excluded):
             raise HTTPException(400, "选择记录包含不存在的关键帧")
         staged = {**ses, "excluded": list(dict.fromkeys(excluded))}
@@ -503,7 +355,7 @@ def save_selection(sid: str, payload: dict):
             _persist_session(sid, staged, result)
         except Exception as exc:
             raise HTTPException(500, "保存选择失败，已保留之前记录") from exc
-        ses.update({key:staged[key] for key in ("excluded", "cache_file", "latest_run", "updated_at")})
+        ses.update({key: staged[key] for key in ("excluded", "cache_file", "latest_run", "updated_at")})
     return {"ok": True, "excluded": ses["excluded"]}
 
 
@@ -511,11 +363,12 @@ def save_selection(sid: str, payload: dict):
 @_storage_guard
 def load_collage_draft(sid: str):
     import collage_engine
+
     ses = _session(sid)
     try:
         draft = collage_engine.clean_draft(ses.get("collage") or {})
     except ValueError:
-        draft = {"ids": [], "crops": {}, "notes": {}}   # 损坏的草稿不阻止使用，重新开始即可
+        draft = {"ids": [], "crops": {}, "notes": {}}  # 损坏的草稿不阻止使用，重新开始即可
     return {"draft": draft, "saved": bool(ses.get("collage"))}
 
 
@@ -524,6 +377,7 @@ def load_collage_draft(sid: str):
 def save_collage_draft(sid: str, payload: dict):
     """拼图草稿（顺序、裁剪、备注）随工作区保存，换浏览器、刷新或重启后都能恢复。"""
     import collage_engine
+
     ses = _session(sid)
     try:
         draft = collage_engine.clean_draft(payload.get("draft"))
@@ -584,8 +438,13 @@ def preview(sid: str, frame_index: int | None = None, time: float | None = None)
             index = int(np.searchsorted(times, timestamp, side="right")) - 1
         index = min(len(times) - 1, max(0, index))
         timestamp = float(times[index])
-        return {"frame_index": index, "time": timestamp, "label": _fmt_time(timestamp),
-                "image_url": f"/api/preview-image/{sid}/{index}", "frames": len(times)}
+        return {
+            "frame_index": index,
+            "time": timestamp,
+            "label": _fmt_time(timestamp),
+            "image_url": f"/api/preview-image/{sid}/{index}",
+            "frames": len(times),
+        }
     finally:
         ses["worker_lock"].release()
 
@@ -636,8 +495,14 @@ def edit(sid: str, payload: dict):
         action = payload.get("action")
         if action not in ("add", "move"):
             raise HTTPException(400, "未知编辑操作")
-        cuts = [{**cut, 'asset_run':workspace_store.asset_ref(result,i)[0],
-                 'file_index':workspace_store.asset_ref(result,i)[1]} for i,cut in enumerate(result["cuts"])]
+        cuts = [
+            {
+                **cut,
+                'asset_run': workspace_store.asset_ref(result, i)[0],
+                'file_index': workspace_store.asset_ref(result, i)[1],
+            }
+            for i, cut in enumerate(result["cuts"])
+        ]
         source = None
         old_cut = None
         if action == "move":
@@ -656,18 +521,19 @@ def edit(sid: str, payload: dict):
             additions.add(target)
             kind = "manual"
         else:
-            original = next((key for key, value in adjustments.items() if value == source), old_cut.get("source_frame", source))
+            original = next(
+                (key for key, value in adjustments.items() if value == source), old_cut.get("source_frame", source)
+            )
             adjustments[original] = target
             kind = "adjusted"
         timestamp = float(ses["cache"]["times"][target])
-        cuts.append({"kind": kind, "frame_index": target, "time": round(timestamp, 6),
-                     "label": _fmt_time(timestamp)})
+        cuts.append({"kind": kind, "frame_index": target, "time": round(timestamp, 6), "label": _fmt_time(timestamp)})
         cuts.sort(key=lambda cut: cut["frame_index"])
         run = uuid.uuid4().hex[:8]
         for cut in cuts:
             if cut['frame_index'] == target:
-                cut.update(asset_run=run,file_index=0)
-        workspace_store.begin_result(WORK,sid,run)
+                cut.update(asset_run=run, file_index=0)
+        workspace_store.begin_result(WORK, sid, run)
         fdir, tdir = (WORK / sid / name / run for name in ("frames", "thumbs"))
         for directory in (fdir, tdir):
             directory.mkdir(parents=True)
@@ -684,18 +550,44 @@ def edit(sid: str, payload: dict):
         thumbnail = cv2.resize(image, (max(1, int(ww * scale)), max(1, int(hh * scale))))
         _write_jpeg(fdir / '0.jpg', image, 95)
         _write_jpeg(tdir / '0.jpg', thumbnail, 85)
-        updated = {**result, "run": run, "cuts": cuts, "created_at": storage_manager.now(), "action": "manual", "pinned": False,
-                   "thumbs": [f"/api/thumb/{sid}/{run}/{i}" for i in range(len(cuts))],
-                   "frames": [f"/api/frame/{sid}/{run}/{i}" for i in range(len(cuts))]}
-        workspace_store.result_urls(sid,updated)
+        updated = {
+            **result,
+            "run": run,
+            "cuts": cuts,
+            "created_at": storage_manager.now(),
+            "action": "manual",
+            "pinned": False,
+            "thumbs": [f"/api/thumb/{sid}/{run}/{i}" for i in range(len(cuts))],
+            "frames": [f"/api/frame/{sid}/{run}/{i}" for i in range(len(cuts))],
+        }
+        workspace_store.result_urls(sid, updated)
         with _lock:
             if _jobs.get(sid) is not job or job.get("result") is not result or job["status"] == "running":
                 raise HTTPException(409, "分析任务或结果已更新，请重试编辑")
             old_keys = {source, (old_cut or {}).get("source_frame", source)}
             excluded = [target if value in old_keys else value for value in ses.get("excluded", [])]
-            staged = {**workspace_store.current_update(ses,updated), "manual_additions": additions, "manual_adjustments": adjustments, "excluded": excluded}
+            staged = {
+                **workspace_store.current_update(ses, updated),
+                "manual_additions": additions,
+                "manual_adjustments": adjustments,
+                "excluded": excluded,
+            }
             _persist_session(sid, staged, updated)
-            ses.update({key:staged[key] for key in ("manual_additions", "manual_adjustments", "excluded", "cache_file", "latest_run", "updated_at", "results", "pending_delete")})
+            ses.update(
+                {
+                    key: staged[key]
+                    for key in (
+                        "manual_additions",
+                        "manual_adjustments",
+                        "excluded",
+                        "cache_file",
+                        "latest_run",
+                        "updated_at",
+                        "results",
+                        "pending_delete",
+                    )
+                }
+            )
             job.update(result=updated, run=run, status="done", pct=100.0, stage="完成", error=None)
             published = True
             _collect_garbage(sid)
@@ -709,8 +601,10 @@ def edit(sid: str, payload: dict):
             for directory in directories:
                 shutil.rmtree(directory, ignore_errors=True)
         if directories:
-            try:workspace_store.finish_result(WORK,sid,run)
-            except OSError:pass
+            try:
+                workspace_store.finish_result(WORK, sid, run)
+            except OSError:
+                pass
         ses["worker_lock"].release()
 
 
@@ -719,8 +613,7 @@ async def upload(file: UploadFile = File(...)):
     name = (file.filename or "video.mp4").replace("\\", "/").split("/")[-1]
     ext = Path(name).suffix.lower()
     if ext not in ALLOWED_EXT:
-        raise HTTPException(400, f"不支持的文件类型「{ext}」。支持："
-                                 + " ".join(sorted(ALLOWED_EXT)))
+        raise HTTPException(400, f"不支持的文件类型「{ext}」。支持：" + " ".join(sorted(ALLOWED_EXT)))
     sid = uuid.uuid4().hex[:10]
     with _lock:
         _storage.active[sid] = _storage.active.get(sid, 0) + 1
@@ -742,8 +635,14 @@ async def upload(file: UploadFile = File(...)):
             shutil.rmtree(sdir, ignore_errors=True)
             raise HTTPException(400, "无法解析该视频：文件可能损坏，或编码不受支持")
         meta["size_mb"] = round(size / 1e6, 1)
-        ses = {"video_path": dest, "video_name": name, "meta": meta, "cache": {},
-               "worker_lock": threading.Lock(), "results": {}}
+        ses = {
+            "video_path": dest,
+            "video_name": name,
+            "meta": meta,
+            "cache": {},
+            "worker_lock": threading.Lock(),
+            "results": {},
+        }
         try:
             _persist_session(sid, ses)
         except Exception as exc:
@@ -782,9 +681,14 @@ def analyze(payload: dict):
         if old:
             old["cancel"] = True
         job = _jobs[sid] = {
-            "status": "running", "pct": 0.0, "stage": "准备中…",
-            "error": None, "cancel": False, "result": None,
-            "sensitivity": sens, "include_ends": ends,
+            "status": "running",
+            "pct": 0.0,
+            "stage": "准备中…",
+            "error": None,
+            "cancel": False,
+            "result": None,
+            "sensitivity": sens,
+            "include_ends": ends,
             "min_scene_seconds": minimum,
             "suppress_flash": bool(payload.get("suppress_flash", True)),
             "pick": pick,
@@ -816,19 +720,38 @@ def status(sid: str):
     ses = _session(sid)
     job = _jobs.get(sid)
     if job is None:
-        return dict(status="idle", run="", video_name=ses["video_name"], meta=ses["meta"],
-                    params=dict(workspace_store.DEFAULT_PARAMS), max_export=MAX_EXPORT,
-                    excluded=ses.get("excluded", []), pct=0.0, stage="等待分析", error=None, result=None)
+        return dict(
+            status="idle",
+            run="",
+            video_name=ses["video_name"],
+            meta=ses["meta"],
+            params=dict(workspace_store.DEFAULT_PARAMS),
+            max_export=MAX_EXPORT,
+            excluded=ses.get("excluded", []),
+            pct=0.0,
+            stage="等待分析",
+            error=None,
+            result=None,
+        )
     result = job["result"]
     if result is not None:
-        result = {**result, "meta": {**result["meta"], "can_edit": bool(ses.get("cache", {}).get("frames"))
-                                   and ses.get("video_path") is not None and not result["meta"].get("gallery_only", False)}}
+        result = {
+            **result,
+            "meta": {
+                **result["meta"],
+                "can_edit": bool(ses.get("cache", {}).get("frames"))
+                and ses.get("video_path") is not None
+                and not result["meta"].get("gallery_only", False),
+            },
+        }
     return {
         "run": job["run"],
         "video_name": _sessions[sid]["video_name"],
         "meta": _sessions[sid]["meta"],
-        "params": {**{key: job[key] for key in ("sensitivity", "include_ends", "min_scene_seconds", "suppress_flash")},
-                   "pick": job.get("pick", "first")},
+        "params": {
+            **{key: job[key] for key in ("sensitivity", "include_ends", "min_scene_seconds", "suppress_flash")},
+            "pick": job.get("pick", "first"),
+        },
         "max_export": MAX_EXPORT,
         "excluded": ses.get("excluded", []),
         "workspace_note": ses.get("workspace_note", "") + ses.get("cleanup_warning", ""),
@@ -840,18 +763,8 @@ def status(sid: str):
     }
 
 
-SIMILAR_THRESHOLD = 80.0      # 相似度 ≥ 80% 视为“与上一张几乎相同”
+SIMILAR_THRESHOLD = 80.0  # 相似度 ≥ 80% 视为“与上一张几乎相同”
 _similar_cache: dict[tuple, dict] = {}
-
-
-def _signature(image):
-    """32×18 的缩略颜色图：轻微运动和压缩噪点影响很小，换了画面则差异明显。"""
-    return cv2.resize(image, (32, 18), interpolation=cv2.INTER_AREA)
-
-
-def _similarity(a, b):
-    """0～100：两张缩略图的平均色差换算成百分比，100 表示完全相同。"""
-    return round(max(0.0, 100.0 - float(np.mean(cv2.absdiff(a, b))) * 100.0 / 48.0), 1)
 
 
 @app.get("/api/similar/{sid}")
@@ -875,8 +788,10 @@ def similar(sid: str, run: str):
             except (ValueError, OSError):
                 image = None
             signatures.append(None if image is None else _signature(image))
-        scores = [None if i == 0 or a is None or signatures[i - 1] is None else _similarity(signatures[i - 1], a)
-                  for i, a in enumerate(signatures)]
+        scores = [
+            None if i == 0 or a is None or signatures[i - 1] is None else _similarity(signatures[i - 1], a)
+            for i, a in enumerate(signatures)
+        ]
         if len(_similar_cache) > 64:
             _similar_cache.clear()
         _similar_cache[key] = {"run": run, "scores": scores, "threshold": SIMILAR_THRESHOLD}
@@ -912,14 +827,17 @@ def frame_dl(sid: str, run: str, i: int):
     results = _session(sid).get("results", {})
     name = "frame.jpg"
     for result in results.values():
-        match = next(((n,c) for n,c in enumerate(result['cuts']) if workspace_store.asset_ref(result,n)==(run,i)),None)
+        match = next(
+            ((n, c) for n, c in enumerate(result['cuts']) if workspace_store.asset_ref(result, n) == (run, i)), None
+        )
         if match:
-            number,c = match
+            number, c = match
             label = "unknown" if c["frame_index"] is None else c["label"].replace(":", "-")
             name = f"{number + 1:03d}_{label}.jpg"
             break
-    return _file_response(sid, path, media_type="image/jpeg",
-                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    return _file_response(
+        sid, path, media_type="image/jpeg", headers={"Content-Disposition": f'attachment; filename="{name}"'}
+    )
 
 
 def _export_archive(sid: str, ids: str = "", run: str = ""):
@@ -927,7 +845,9 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
     job = _jobs.get(sid)
     result = ses.get("results", {}).get(run) if run else (job or {}).get("result")
     if not result:
-        raise HTTPException(409 if run else 400, "结果已更新，请刷新后重新选择" if run else "还没有可导出的结果，请先完成分析")
+        raise HTTPException(
+            409 if run else 400, "结果已更新，请刷新后重新选择" if run else "还没有可导出的结果，请先完成分析"
+        )
     cuts = result["cuts"]
     if not cuts:
         raise HTTPException(400, "没有检测到任何关键帧")
@@ -943,7 +863,7 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
     if len(wanted) > MAX_EXPORT:
         raise HTTPException(400, f"一次最多导出 {MAX_EXPORT} 张，请先减少选择")
     fdir = _safe_path(sid, "frames", result["run"])
-    paths = {i: workspace_store.asset_path(WORK,sid,result,i) for i in wanted}
+    paths = {i: workspace_store.asset_path(WORK, sid, result, i) for i in wanted}
     if any(not paths[i].is_file() for i in wanted):
         raise HTTPException(409, "选中的原图文件缺失，请重新分析；未导出不完整的结果")
     export_dir = _safe_path(sid, "exports")
@@ -969,8 +889,13 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
 
 def _zip_response(sid, path):
     stem = re_safe(Path(_sessions[sid]["video_name"]).stem or "video")
-    return _file_response(sid, path, media_type="application/zip", filename=f"关键帧_{stem}.zip",
-                        background=BackgroundTask(path.unlink, missing_ok=True))
+    return _file_response(
+        sid,
+        path,
+        media_type="application/zip",
+        filename=f"关键帧_{stem}.zip",
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
 
 
 @app.get("/api/export/{sid}")
@@ -1008,10 +933,12 @@ def re_safe(name: str) -> str:
 
 def re_sub(name: str) -> str:
     import re
+
     return re.sub(r'[\\/:*?"<>|\r\n\t]', "_", name)[:80]
 
 
 # ---------------------------------------------------------------- Pillow reference collages
+
 
 def _collage_result(sid, payload):
     ses = _session(sid)
@@ -1023,15 +950,23 @@ def _collage_result(sid, payload):
 
 def _collage_ids(result, payload, limit):
     ids = payload.get('ids')
-    if not isinstance(ids, list) or not 1 <= len(ids) <= limit or any(type(i) is not int or not 0 <= i < len(result['cuts']) for i in ids) or len(set(ids)) != len(ids):
+    if (
+        not isinstance(ids, list)
+        or not 1 <= len(ids) <= limit
+        or any(type(i) is not int or not 0 <= i < len(result['cuts']) for i in ids)
+        or len(set(ids)) != len(ids)
+    ):
         raise HTTPException(400, f'请选择1至{limit}张不重复的有效关键帧')
     return ids
 
 
 def _collage_options(payload):
     import collage_engine
-    try: return collage_engine.validate_options(payload, payload.get('ids', []))
-    except ValueError as exc: raise HTTPException(400, str(exc)) from exc
+
+    try:
+        return collage_engine.validate_options(payload, payload.get('ids', []))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def _collage_sources(sid, payload, limit=16):
@@ -1044,82 +979,132 @@ def _collage_sources(sid, payload, limit=16):
             run, number = workspace_store.asset_ref(result, i)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        if not path.is_file(): raise HTTPException(409, '选中的原图文件缺失，请恢复工作区或重新分析')
-        src=f'/api/frame/{sid}/{run}/{number}'
-        thumb=workspace_store.asset_path(WORK,sid,result,i,'thumbs')
-        sources.append(dict(id=i, path=path, label=result['cuts'][i].get('label','未知'),
-                            src=src, thumb=f'/api/thumb/{sid}/{run}/{number}' if thumb.is_file() else src))
+        if not path.is_file():
+            raise HTTPException(409, '选中的原图文件缺失，请恢复工作区或重新分析')
+        src = f'/api/frame/{sid}/{run}/{number}'
+        thumb = workspace_store.asset_path(WORK, sid, result, i, 'thumbs')
+        sources.append(
+            dict(
+                id=i,
+                path=path,
+                label=result['cuts'][i].get('label', '未知'),
+                src=src,
+                thumb=f'/api/thumb/{sid}/{run}/{number}' if thumb.is_file() else src,
+            )
+        )
     return sources
 
 
 def _collage_plan(payload, sources):
     import collage_engine
     from PIL.Image import DecompressionBombError
-    try: return collage_engine.plan(payload, sources)
+
+    try:
+        return collage_engine.plan(payload, sources)
     except (ValueError, OSError, DecompressionBombError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 def _expire_collages(sid, keep=3):
     import collage_engine, time
-    if _storage.active.get(sid, 0): return
+
+    if _storage.active.get(sid, 0):
+        return
     directory = _safe_path(sid, 'exports')
-    if not directory.is_dir(): return
+    if not directory.is_dir():
+        return
     groups = {}
     for path in directory.iterdir():
         if collage_engine.managed_file(path.name):
             path = _safe_path(sid, 'exports', path.name)
             token = path.name[8:40]
             groups.setdefault(token, []).append(path)
-    ordered = sorted(groups.values(), key=lambda paths:max(p.stat().st_mtime for p in paths), reverse=True)
+    ordered = sorted(groups.values(), key=lambda paths: max(p.stat().st_mtime for p in paths), reverse=True)
     for n, paths in enumerate(ordered):
-        if any(_storage.prepared.get((sid,p.name),0)>time.monotonic() for p in paths):continue
-        if n >= keep or time.time()-max(p.stat().st_mtime for p in paths)>3600:
+        if any(_storage.prepared.get((sid, p.name), 0) > time.monotonic() for p in paths):
+            continue
+        if n >= keep or time.time() - max(p.stat().st_mtime for p in paths) > 3600:
             for p in paths:
-                try:p.unlink(missing_ok=True)
-                except OSError:pass
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 @app.post('/api/collage/{sid}/plan')
 @_storage_guard
 def plan_collage(sid: str, payload: dict):
     _expire_collages(sid)
-    return _collage_plan(payload, _collage_sources(sid,payload))
+    return _collage_plan(payload, _collage_sources(sid, payload))
 
 
 @app.post('/api/collage/{sid}/render')
 @_storage_guard
 def render_collage(sid: str, payload: dict):
     import collage_engine, time
-    sources = _collage_sources(sid,payload)
-    plan = _collage_plan(payload,sources)
-    if not plan['can_render']:raise HTTPException(400,plan['warning'])
+
+    sources = _collage_sources(sid, payload)
+    plan = _collage_plan(payload, sources)
+    if not plan['can_render']:
+        raise HTTPException(400, plan['warning'])
     # The existing storage RLock serializes renders and protects all source files.
-    _expire_collages(sid,keep=2)
-    if sum(1 for (record,name),expiry in _storage.prepared.items() if record == sid and name.startswith('collage-') and expiry > time.monotonic()) >= 8:
+    _expire_collages(sid, keep=2)
+    if (
+        sum(
+            1
+            for (record, name), expiry in _storage.prepared.items()
+            if record == sid and name.startswith('collage-') and expiry > time.monotonic()
+        )
+        >= 8
+    ):
         raise HTTPException(429, '待查看拼图过多，请关闭旧成品或稍后再生成')
-    token=uuid.uuid4().hex
-    fmt=payload.get('format','png');ext='png' if fmt=='png' else 'jpg'
-    directory=_safe_path(sid,'exports');directory.mkdir(exist_ok=True)
-    name=f'collage-{token}'
-    path=directory/f'{name}.{ext}';preview=directory/f'{name}-preview.jpg';metadata=directory/f'{name}.json'
+    token = uuid.uuid4().hex
+    fmt = payload.get('format', 'png')
+    ext = 'png' if fmt == 'png' else 'jpg'
+    directory = _safe_path(sid, 'exports')
+    directory.mkdir(exist_ok=True)
+    name = f'collage-{token}'
+    path = directory / f'{name}.{ext}'
+    preview = directory / f'{name}-preview.jpg'
+    metadata = directory / f'{name}.json'
     try:
-        collage_engine.render(plan,sources,payload,path,preview)
-        video_name=_collage_video_name(sid)
-        layout='智能排版' if plan['layout']=='justified' else f"{plan['columns']}列网格"
-        filename=f"参考拼图_{video_name}_{layout}_{payload.get('page',1):02d}.{ext}"
-        workspace_store.atomic_json(metadata,dict(token=token,format=fmt,filename=filename,run=payload['run'],created_at=time.time(),width=plan['width'],height=plan['height']))
+        collage_engine.render(plan, sources, payload, path, preview)
+        video_name = _collage_video_name(sid)
+        layout = '智能排版' if plan['layout'] == 'justified' else f"{plan['columns']}列网格"
+        filename = f"参考拼图_{video_name}_{layout}_{payload.get('page', 1):02d}.{ext}"
+        workspace_store.atomic_json(
+            metadata,
+            dict(
+                token=token,
+                format=fmt,
+                filename=filename,
+                run=payload['run'],
+                created_at=time.time(),
+                width=plan['width'],
+                height=plan['height'],
+            ),
+        )
     except Exception as exc:
-        for p in (path,preview,metadata):p.unlink(missing_ok=True)
-        raise HTTPException(400,'拼图生成失败：'+str(exc)) from exc
-    _storage.prepared[(sid,metadata.name)]=time.monotonic()+60
-    base=f'/api/collage/{sid}/{token}'
-    return dict(token=token,width=plan['width'],height=plan['height'],format=fmt,bytes=path.stat().st_size,
-                preview_url=base+'/preview',image_url=base+'/image',download_url=base+'/download',plan=plan)
+        for p in (path, preview, metadata):
+            p.unlink(missing_ok=True)
+        raise HTTPException(400, '拼图生成失败：' + str(exc)) from exc
+    _storage.prepared[(sid, metadata.name)] = time.monotonic() + 60
+    base = f'/api/collage/{sid}/{token}'
+    return dict(
+        token=token,
+        width=plan['width'],
+        height=plan['height'],
+        format=fmt,
+        bytes=path.stat().st_size,
+        preview_url=base + '/preview',
+        image_url=base + '/image',
+        download_url=base + '/download',
+        plan=plan,
+    )
 
 
 def _collage_video_name(sid):
-    return re_safe(Path(_session(sid).get('video_name','video')).stem or 'video')
+    return re_safe(Path(_session(sid).get('video_name', 'video')).stem or 'video')
 
 
 @app.post('/api/collage/{sid}/render-all')
@@ -1127,24 +1112,29 @@ def _collage_video_name(sid):
 def render_all_collages(sid: str, payload: dict):
     """Every page of the selection, rendered one at a time into a zip with the storyboard CSV."""
     import collage_engine, time
+
     result = _collage_result(sid, payload)
     sources = _collage_sources(sid, payload, collage_engine.MAX_BATCH)
     capacity, _ = _collage_options(payload)
     ids = payload['ids']
-    pages = [ids[i:i+capacity] for i in range(0, len(ids), capacity)]
+    pages = [ids[i : i + capacity] for i in range(0, len(ids), capacity)]
     by_id = {s['id']: s for s in sources}
     plans = []
     for n, page_ids in enumerate(pages, 1):
         page = collage_engine.page_payload(payload, page_ids, n)
         plan = _collage_plan(page, [by_id[i] for i in page_ids])
-        if not plan['can_render']: raise HTTPException(400, f'第 {n} 张拼图：{plan["warning"]}')
+        if not plan['can_render']:
+            raise HTTPException(400, f'第 {n} 张拼图：{plan["warning"]}')
         plans.append((page, plan))
     _expire_collages(sid, keep=2)
     token = uuid.uuid4().hex
-    fmt = payload.get('format','png'); ext = 'png' if fmt == 'png' else 'jpg'
-    directory = _safe_path(sid,'exports'); directory.mkdir(exist_ok=True)
-    archive_path = directory/f'collage-{token}.zip'; scratch = directory/f'collage-{token}.{ext}'
-    metadata = directory/f'collage-{token}.json'
+    fmt = payload.get('format', 'png')
+    ext = 'png' if fmt == 'png' else 'jpg'
+    directory = _safe_path(sid, 'exports')
+    directory.mkdir(exist_ok=True)
+    archive_path = directory / f'collage-{token}.zip'
+    scratch = directory / f'collage-{token}.{ext}'
+    metadata = directory / f'collage-{token}.json'
     video_name = _collage_video_name(sid)
     try:
         with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_STORED) as archive:
@@ -1154,14 +1144,28 @@ def render_all_collages(sid: str, payload: dict):
                 scratch.unlink()
             archive.writestr('分镜表.csv', collage_engine.storyboard_csv(payload, result['cuts']))
         filename = f'参考拼图_{video_name}_共{len(pages)}张.zip'
-        workspace_store.atomic_json(metadata, dict(token=token, format='zip', filename=filename, run=payload['run'],
-                                                   created_at=time.time(), pages=len(pages)))
+        workspace_store.atomic_json(
+            metadata,
+            dict(
+                token=token,
+                format='zip',
+                filename=filename,
+                run=payload['run'],
+                created_at=time.time(),
+                pages=len(pages),
+            ),
+        )
     except Exception as exc:
-        for p in (archive_path, scratch, metadata): p.unlink(missing_ok=True)
-        raise HTTPException(400, '拼图打包失败：'+str(exc)) from exc
-    _storage.prepared[(sid, metadata.name)] = time.monotonic()+60
-    return dict(token=token, pages=len(pages), bytes=archive_path.stat().st_size,
-                download_url=f'/api/collage/{sid}/{token}/download')
+        for p in (archive_path, scratch, metadata):
+            p.unlink(missing_ok=True)
+        raise HTTPException(400, '拼图打包失败：' + str(exc)) from exc
+    _storage.prepared[(sid, metadata.name)] = time.monotonic() + 60
+    return dict(
+        token=token,
+        pages=len(pages),
+        bytes=archive_path.stat().st_size,
+        download_url=f'/api/collage/{sid}/{token}/download',
+    )
 
 
 @app.post('/api/collage/{sid}/storyboard')
@@ -1169,48 +1173,65 @@ def render_all_collages(sid: str, payload: dict):
 def collage_storyboard(sid: str, payload: dict):
     import collage_engine
     from urllib.parse import quote
+
     result = _collage_result(sid, payload)
     _collage_ids(result, payload, collage_engine.MAX_BATCH)
     _collage_options(payload)
     name = quote(f'分镜表_{_collage_video_name(sid)}.csv')
-    return Response(collage_engine.storyboard_csv(payload, result['cuts']), media_type='text/csv; charset=utf-8',
-                    headers={'Content-Disposition': f"attachment; filename*=UTF-8''{name}"})
+    return Response(
+        collage_engine.storyboard_csv(payload, result['cuts']),
+        media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f"attachment; filename*=UTF-8''{name}"},
+    )
 
 
 @app.get('/api/collage/{sid}/{token}/{view}')
 @_storage_guard
 def collage_file(sid: str, token: str, view: str):
     import collage_engine, json
+
     _session(sid)
-    if not collage_engine.TOKEN.fullmatch(token) or view not in ('preview','image','download'):raise HTTPException(404,'拼图不存在')
-    metadata=_safe_path(sid,'exports',f'collage-{token}.json')
-    try:info=json.loads(metadata.read_text(encoding='utf-8'))
-    except (OSError,ValueError):raise HTTPException(404,'拼图已清理，请重新生成')
-    if info.get('format') not in ('png','jpeg','zip'):raise HTTPException(404,'拼图记录无效')
-    if info['format']=='zip':
-        path=_safe_path(sid,'exports',f'collage-{token}.zip')
-        if view!='download' or not path.is_file():raise HTTPException(404,'拼图已清理，请重新生成')
-        return _file_response(sid,path,media_type='application/zip',filename=re_safe(info.get('filename',f'参考拼图_{token[:8]}.zip')))
-    ext='png' if info['format']=='png' else 'jpg'
-    path=_safe_path(sid,'exports',f'collage-{token}-preview.jpg' if view=='preview' else f'collage-{token}.{ext}')
-    if not path.is_file():raise HTTPException(404,'拼图已清理，请重新生成')
-    kwargs={'media_type':'image/jpeg' if view=='preview' or ext=='jpg' else 'image/png'}
-    if view=='download':kwargs['filename']=re_safe(info.get('filename',f'参考拼图_{token[:8]}.{ext}'))
-    return _file_response(sid,path,**kwargs)
+    if not collage_engine.TOKEN.fullmatch(token) or view not in ('preview', 'image', 'download'):
+        raise HTTPException(404, '拼图不存在')
+    metadata = _safe_path(sid, 'exports', f'collage-{token}.json')
+    try:
+        info = json.loads(metadata.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        raise HTTPException(404, '拼图已清理，请重新生成')
+    if info.get('format') not in ('png', 'jpeg', 'zip'):
+        raise HTTPException(404, '拼图记录无效')
+    if info['format'] == 'zip':
+        path = _safe_path(sid, 'exports', f'collage-{token}.zip')
+        if view != 'download' or not path.is_file():
+            raise HTTPException(404, '拼图已清理，请重新生成')
+        return _file_response(
+            sid, path, media_type='application/zip', filename=re_safe(info.get('filename', f'参考拼图_{token[:8]}.zip'))
+        )
+    ext = 'png' if info['format'] == 'png' else 'jpg'
+    path = _safe_path(sid, 'exports', f'collage-{token}-preview.jpg' if view == 'preview' else f'collage-{token}.{ext}')
+    if not path.is_file():
+        raise HTTPException(404, '拼图已清理，请重新生成')
+    kwargs = {'media_type': 'image/jpeg' if view == 'preview' or ext == 'jpg' else 'image/png'}
+    if view == 'download':
+        kwargs['filename'] = re_safe(info.get('filename', f'参考拼图_{token[:8]}.{ext}'))
+    return _file_response(sid, path, **kwargs)
 
 
 @app.delete('/api/collage/{sid}/{token}')
 @_storage_guard
 def delete_collage(sid: str, token: str):
     import collage_engine
+
     _session(sid)
-    if not collage_engine.TOKEN.fullmatch(token):raise HTTPException(400,'拼图标识无效')
-    if _storage.active.get(sid,0):raise HTTPException(409,'文件正在发送，请稍后清理')
-    for suffix in ('.png','.jpg','.zip','-preview.jpg','.json'):
-        path=_safe_path(sid,'exports',f'collage-{token}{suffix}')
+    if not collage_engine.TOKEN.fullmatch(token):
+        raise HTTPException(400, '拼图标识无效')
+    if _storage.active.get(sid, 0):
+        raise HTTPException(409, '文件正在发送，请稍后清理')
+    for suffix in ('.png', '.jpg', '.zip', '-preview.jpg', '.json'):
+        path = _safe_path(sid, 'exports', f'collage-{token}{suffix}')
         path.unlink(missing_ok=True)
-        _storage.prepared.pop((sid,path.name),None)
-    return {'status':'done'}
+        _storage.prepared.pop((sid, path.name), None)
+    return {'status': 'done'}
 
 
 # ---------------------------------------------------------------- 静态页面

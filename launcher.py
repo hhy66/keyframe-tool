@@ -3,11 +3,11 @@
 打包启动器（供 PyInstaller 打成单文件 exe 用）。
 双击 exe → 启动服务并自动打开浏览器。
 """
+
 import os
 import socket
 import threading
 import time
-from pathlib import Path
 
 PORT = int(os.environ.get("PORT", "8765"))
 URL = f"http://127.0.0.1:{PORT}"
@@ -23,6 +23,7 @@ def open_browser():
     try:
         time.sleep(1.5)
         import webbrowser
+
         webbrowser.open(URL)
     except Exception:
         pass

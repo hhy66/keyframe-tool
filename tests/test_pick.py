@@ -1,4 +1,5 @@
 """Which frame of each detected shot is captured: first, about 0.5 s later, or the sharpest early frame."""
+
 import tempfile
 import threading
 import unittest
@@ -25,8 +26,10 @@ class PickTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="keyframe-pick-")
         self.root = Path(self.tmp.name)
-        self.patches = [patch.object(server, "WORK", self.root),
-                        patch.object(server, "_storage", storage_manager.Manager(server))]
+        self.patches = [
+            patch.object(server, "WORK", self.root),
+            patch.object(server, "_storage", storage_manager.Manager(server)),
+        ]
         for p in self.patches:
             p.start()
         server._sessions.clear()
@@ -58,8 +61,13 @@ class PickTests(unittest.TestCase):
     def run_analysis(self, sid="pick", **params):
         if sid not in server._sessions:
             path = self.video()
-            server._sessions[sid] = {"video_path": path, "video_name": path.name, "meta": server.probe(path),
-                                     "cache": {}, "worker_lock": threading.Lock()}
+            server._sessions[sid] = {
+                "video_path": path,
+                "video_name": path.name,
+                "meta": server.probe(path),
+                "cache": {},
+                "worker_lock": threading.Lock(),
+            }
         with patch.object(server.threading, "Thread", ImmediateThread):
             server.analyze({"session_id": sid, "min_scene_seconds": 2.5, **params})
         job = server._jobs[sid]
@@ -98,8 +106,13 @@ class PickTests(unittest.TestCase):
 
     def test_invalid_strategy_is_rejected(self):
         path = self.video()
-        server._sessions["pick"] = {"video_path": path, "video_name": path.name, "meta": server.probe(path),
-                                    "cache": {}, "worker_lock": threading.Lock()}
+        server._sessions["pick"] = {
+            "video_path": path,
+            "video_name": path.name,
+            "meta": server.probe(path),
+            "cache": {},
+            "worker_lock": threading.Lock(),
+        }
         with self.assertRaises(HTTPException):
             server.analyze({"session_id": "pick", "pick": "middle"})
 
