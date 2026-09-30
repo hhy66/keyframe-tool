@@ -138,7 +138,12 @@ const Review = {
     if (!count) return;
     const moves = {ArrowRight: 1, ArrowLeft: -1, ArrowDown: this.columns(), ArrowUp: -this.columns()};
     if (key in moves) {
-      this.setCursor(state.cursor == null ? 0 : state.cursor + moves[key]);
+      // Move among the cards on screen: a filter hides the others.
+      const shown = state.cards.flatMap((card, i) => (card.item?.hidden ? [] : [i]));
+      if (!shown.length) return;
+      const at = state.cursor == null ? -1 : shown.indexOf(state.cursor);
+      const next = at < 0 ? 0 : Math.max(0, Math.min(shown.length - 1, at + moves[key]));
+      this.setCursor(shown[next]);
       event.preventDefault();
       return;
     }
