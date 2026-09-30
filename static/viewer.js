@@ -13,6 +13,12 @@ const Viewer = {
   count() {
     return state.cuts.length;
   },
+  // The next picture in that direction that is not hidden by a filter; the same one at either end.
+  neighbor(i, delta) {
+    let j = i + delta;
+    while (j >= 0 && j < this.count() && state.cards?.[j]?.item?.hidden) j += delta;
+    return j >= 0 && j < this.count() ? j : i;
+  },
 
   open(i) {
     if (!state.frames[i]) return;
@@ -65,8 +71,8 @@ const Viewer = {
     const download = this.el('#vwDownload');
     download.href = state.frames[i].replace('/api/frame/', '/api/frame-dl/');
     download.download = '';
-    this.el('#vwPrev').disabled = i === 0;
-    this.el('#vwNext').disabled = i === count - 1;
+    this.el('#vwPrev').disabled = this.neighbor(i, -1) === i;
+    this.el('#vwNext').disabled = this.neighbor(i, 1) === i;
     this.el('#vwEdit').disabled = !state.cards?.[i] || state.cards[i].edit.disabled;
     if (typeof Analysis !== 'undefined') Analysis.paintViewer(i);
     this.paint();
@@ -137,7 +143,8 @@ const Viewer = {
     const i = this.index;
     if (i == null || state.busy || state.editBusy) return;
     if (state.sel.has(i) !== keep) setKept([i], keep);
-    if (advance && i < this.count() - 1) this.show(i + 1);
+    const next = this.neighbor(i, 1);
+    if (advance && next !== i) this.show(next);
     else {
       this.paint();
       if (advance) toast(`已是最后一张：保留 ${state.sel.size} / ${this.count()} 张。按 Esc 回到网格。`);
@@ -165,8 +172,8 @@ const Viewer = {
         event.code
       ] || event.key.toLowerCase();
     const actions = {
-      arrowleft: () => this.show(this.index - 1),
-      arrowright: () => this.show(this.index + 1),
+      arrowleft: () => this.show(this.neighbor(this.index, -1)),
+      arrowright: () => this.show(this.neighbor(this.index, 1)),
       arrowup: () => this.mark(true, true),
       arrowdown: () => this.mark(false, true),
       ' ': () => this.toggle(),
@@ -199,8 +206,8 @@ if (typeof document !== 'undefined' && document.querySelector('#vwStrip')) {
   window.addEventListener('resize', () => {
     if (Viewer.isOpen()) Viewer.fit();
   });
-  on('#vwPrev', () => Viewer.show(Viewer.index - 1));
-  on('#vwNext', () => Viewer.show(Viewer.index + 1));
+  on('#vwPrev', () => Viewer.show(Viewer.neighbor(Viewer.index, -1)));
+  on('#vwNext', () => Viewer.show(Viewer.neighbor(Viewer.index, 1)));
   on('#vwKeep', () => Viewer.mark(true, true));
   on('#vwSkip', () => Viewer.mark(false, true));
   on('#vwEdit', () => Viewer.edit());
@@ -221,6 +228,6 @@ if (typeof document !== 'undefined' && document.querySelector('#vwStrip')) {
     if (Viewer.touchX == null) return;
     const dx = event.clientX - Viewer.touchX;
     Viewer.touchX = null;
-    if (Math.abs(dx) > 60) Viewer.show(Viewer.index + (dx < 0 ? 1 : -1));
+    if (Math.abs(dx) > 60) Viewer.show(Viewer.neighbor(Viewer.index, dx < 0 ? 1 : -1));
   });
 }

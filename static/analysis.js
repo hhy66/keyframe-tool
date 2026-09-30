@@ -207,6 +207,7 @@ const Analysis = {
   paint() {
     this.paintButton();
     this.paintCards();
+    if (typeof Overview !== 'undefined') Overview.paint();
     if (typeof Viewer !== 'undefined' && Viewer.isOpen()) this.paintViewer(Viewer.index);
   },
 

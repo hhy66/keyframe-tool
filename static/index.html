@@ -358,6 +358,12 @@
         <tr><td><kbd>?</kbd></td><td>展开 / 收起本说明</td></tr>
       </table>
     </details>
+    <details class="overview" id="overview" hidden>
+      <summary><b>整片节奏</b><span id="overviewHeadline"></span></summary>
+      <div id="overviewBody"></div>
+      <div class="ovTip" id="overviewTip" hidden role="tooltip"></div>
+    </details>
+    <div class="ovFilter" id="overviewFilter" hidden><span></span><button type="button" class="btn ghost small" id="overviewClear">显示全部</button></div>
     <div class="hint left" id="exportLimit"></div>
     <div class="hint left" id="resultNote"></div>
     <div id="grid"></div>
@@ -474,6 +480,7 @@
 <script src="/review.js"></script>
 <script src="/viewer.js"></script>
 <script src="/analysis.js"></script>
+<script src="/overview.js"></script>
 <div id="collagePanel" class="appView" hidden role="region" aria-labelledby="collageTitle">
   <div class="viewHead">
     <button type="button" class="btn ghost small viewBack" id="collageClose">← 返回关键帧结果</button>
