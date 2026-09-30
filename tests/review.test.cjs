@@ -133,3 +133,41 @@ test('skipping similar shots only touches flagged photos that are still kept', (
   assert.equal(r.log.at(-1), 'setKept 1 false');
   assert.equal(r.$('#btnSkipSimilar').disabled, true);
 });
+
+test('the similar-shot button stays visible and says when nothing similar was found', () => {
+  const r = boot();
+  r.Review.checked = true;
+  r.Review.flagged = [];
+  r.Review.updateSkipButton();
+  const button = r.$('#btnSkipSimilar');
+  assert.equal(button.hidden, false);
+  assert.equal(button.disabled, true);
+  assert.equal(button.textContent, '未发现相似画面');
+  r.Review.checked = false;
+  r.Review.updateSkipButton();
+  assert.equal(button.hidden, true);
+});
+test('space and Enter keep their meaning on a focused button, arrows still move', () => {
+  const r = boot();
+  r.key('ArrowRight');
+  const button = {tagName: 'BUTTON'};
+  assert.equal(r.key(' ', {target: button}).prevented, undefined);
+  assert.equal(r.key('Enter', {target: button}).prevented, undefined);
+  assert.equal(r.log.length, 0);
+  r.key('ArrowRight', {target: button});
+  assert.equal(r.state.cursor, 1);
+});
+test('letter shortcuts work while a Chinese input method is on', () => {
+  const r = boot();
+  r.key('ArrowRight');
+  r.key('Process', {code: 'KeyE'});
+  r.key('Process', {code: 'KeyX'});
+  assert.equal(r.log.join('|'), 'edit 0|toggle 0');
+});
+test('after clicking a checkbox and moving, Space acts on the blue card', () => {
+  const r = boot();
+  r.key('ArrowRight');
+  r.key('ArrowRight');
+  assert.equal(r.key(' ', {target: {tagName: 'INPUT', type: 'checkbox'}}).prevented, true);
+  assert.equal(r.log.join('|'), 'toggle 1');
+});

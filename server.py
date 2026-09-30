@@ -72,6 +72,16 @@ MAX_EXPORT = 500  # 单次打包上限
 
 app = FastAPI(title="视频关键帧截取工具", lifespan=lifespan)
 
+
+@app.middleware("http")
+async def _no_stale_pages(request, call_next):
+    """页面与脚本每次都向本机服务确认是否更新（未变时只回 304），升级后不会混用旧脚本。"""
+    response = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
+
 _lock = threading.RLock()
 _sessions: dict[str, dict] = {}  # session_id -> {video_path, video_name, meta, cache}
 _jobs: dict[str, dict] = {}  # session_id -> job

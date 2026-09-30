@@ -409,7 +409,7 @@ function render(res, restoreParams = true) {
       for (let k = from; k <= to; k++) indexes.push(k);
       state.anchor = i;
       setKept(indexes, keep);
-      if (typeof Review !== 'undefined') Review.setCursor(i);
+      if (typeof Review !== 'undefined') Review.clicked(i);
       else state.cursor = i;
     };
     const editRow = document.createElement('div');

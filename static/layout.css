@@ -391,7 +391,23 @@ body.navCollapsed .navToggle {
 /* Review helpers: keyboard cursor, near-duplicate badge and the shortcut list. */
 .item.cursor {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px #c7c9ff;
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 8px 22px rgba(79, 70, 229, 0.35);
+}
+.item.cursor::after {
+  content: '当前';
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  pointer-events: none;
 }
 .badge.simBadge {
   background: #fee2e2;

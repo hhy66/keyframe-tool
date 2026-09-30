@@ -66,3 +66,23 @@ class SimilarTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class StaleScriptTests(unittest.TestCase):
+    def test_pages_and_scripts_are_revalidated_but_api_responses_untouched(self):
+        import asyncio
+        from types import SimpleNamespace
+
+        from starlette.responses import Response
+
+        async def call(path):
+            request = SimpleNamespace(url=SimpleNamespace(path=path))
+
+            async def call_next(_):
+                return Response('ok')
+
+            return await server._no_stale_pages(request, call_next)
+
+        self.assertEqual(asyncio.run(call('/app.js')).headers['cache-control'], 'no-cache')
+        self.assertEqual(asyncio.run(call('/')).headers['cache-control'], 'no-cache')
+        self.assertNotIn('cache-control', asyncio.run(call('/api/status/x')).headers)

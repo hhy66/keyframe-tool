@@ -1,8 +1,10 @@
 /* Faster review of results: keyboard shortcuts and hints for near-duplicate screenshots.
    Uses `state`, `setKept`, `openLb` and `closeLb` from app.js. */
+const REVIEW_HINT_KEY = 'keyframe-tool.review.hinted';
 const Review = {
   similarToken: 0,
   flagged: [],
+  checked: false,
 
   el(selector) {
     return document.querySelector(selector);
@@ -16,6 +18,7 @@ const Review = {
   async loadSimilar(res) {
     const token = ++this.similarToken;
     this.flagged = [];
+    this.checked = false;
     this.paintSimilar({});
     if (!state.sid || !res?.run || !state.cuts.length) return;
     let data;
@@ -26,6 +29,7 @@ const Review = {
     } // 提示只是辅助，读取失败不影响挑选
     if (token !== this.similarToken || state.resultRun !== res.run) return;
     this.flagged = this.flags(data.scores || [], data.threshold ?? 80);
+    this.checked = true;
     this.paintSimilar(Object.fromEntries(this.flagged.map(i => [i, data.scores[i]])));
   },
 
@@ -45,9 +49,14 @@ const Review = {
   updateSkipButton() {
     const button = this.el('#btnSkipSimilar');
     const pending = this.flagged.filter(i => state.sel.has(i));
-    button.hidden = !this.flagged.length;
+    // Always visible once checked, so it is clear the check ran even when nothing was found.
+    button.hidden = !this.checked;
     button.disabled = !pending.length || state.busy || state.editBusy;
-    button.textContent = pending.length ? `跳过相似画面 (${pending.length})` : '相似画面已跳过';
+    button.textContent = !this.flagged.length
+      ? '未发现相似画面'
+      : pending.length
+        ? `跳过相似画面 (${pending.length})`
+        : '相似画面已跳过';
   },
 
   skipSimilar() {
@@ -62,6 +71,25 @@ const Review = {
   columns() {
     const template = getComputedStyle(this.el('#grid')).gridTemplateColumns;
     return Math.max(1, template.split(' ').filter(Boolean).length);
+  },
+
+  // A card was clicked: it becomes the current card; the first time, say that arrows now work.
+  clicked(i) {
+    this.setCursor(i);
+    const seen = (() => {
+      try {
+        return localStorage.getItem(REVIEW_HINT_KEY) === '1';
+      } catch {
+        return true;
+      }
+    })();
+    if (seen) return;
+    try {
+      localStorage.setItem(REVIEW_HINT_KEY, '1');
+    } catch {
+      /* 仅本次提示 */
+    }
+    toast('蓝框是当前卡片：可用 ← → ↑ ↓ 切换，空格保留/跳过，Enter 看大图，按 ? 查看全部快捷键。');
   },
 
   setCursor(i) {
@@ -92,7 +120,13 @@ const Review = {
     if (this.blocked(event)) return;
     const lightbox = !this.el('#lb').hidden;
     const count = state.cards?.length || 0;
-    const key = event.key;
+    // Letter shortcuts follow the physical key so they also work with a Chinese input method on.
+    const key = {KeyX: 'x', KeyE: 'e'}[event.code] || event.key;
+    // Space and Enter keep their own meaning on a focused button or link. A card's checkbox is not
+    // included: after clicking it and moving with the arrows, Space must act on the blue card.
+    const target = event.target || {};
+    const native = ['BUTTON', 'A', 'SUMMARY'].includes(target.tagName);
+    if (native && (key === ' ' || key === 'Enter')) return;
     if (lightbox) {
       if (key === 'ArrowRight' || key === 'ArrowLeft') {
         const next = Math.max(0, Math.min(count - 1, (state.lbIndex ?? 0) + (key === 'ArrowRight' ? 1 : -1)));
