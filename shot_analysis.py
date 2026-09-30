@@ -30,7 +30,8 @@ PERSON_FULL = 0.35  # 没有正脸时：完整的人体框高于此比例算全�
 THIRD_BAND = 0.08
 CENTER_BAND = 0.07
 SYMMETRY_MIN = 0.9  # 左右镜像相似度
-SPACE_SUBJECT = 0.12  # 主体面积小于此比例且偏在一侧时，提示留白
+SPACE_SUBJECT = 0.12
+FIGURE_MIN = 0.1  # 多人构图时，面积不到最大人物 10% 的路人不算  # 主体面积小于此比例且偏在一侧时，提示留白
 
 # 水平：参与判断的直线总长至少为画面宽度的比例，以及倾斜档位（度）
 LEVEL_MIN_LENGTH = 0.6
@@ -40,6 +41,7 @@ LEVEL_DUTCH = 5.0
 # 景深：主体区域与背景区域清晰度之比
 DEPTH_SHALLOW = 2.5
 DEPTH_DEEP = 1.5
+DEPTH_DARK = 28  # 平均亮度（0～255）低于此值的区域不参与景深比较
 BLURRY = 4.0  # 最清晰的几块（拉普拉斯均值的 98% 分位）也低于此值时，算整体偏糊
 
 _local = threading.local()
@@ -233,8 +235,54 @@ def salient_subject(bgr):
     }
 
 
+def _inside(inner, outer, slack=0.02):
+    x, y, w, h = inner
+    ox, oy, ow, oh = outer
+    return x >= ox - slack and y >= oy - slack and x + w <= ox + ow + slack and y + h <= oy + oh + slack
+
+
+def figures(found):
+    """画面里的每个人：人物框，加上没落在任何人物框里的人脸。太小的路人（不到最大者的 10%）不算。"""
+    if not found:
+        return []
+    boxes = [p['box'] for p in found['people']]
+    for face in found['faces']:
+        if any(_inside(face['box'], b) for b in boxes):
+            continue
+        # 只找到脸的人：按头肩的大小估一个人物框，才能和其他人物框比大小
+        x, y, w, h = face['box']
+        x0, y0 = max(0.0, x - w), max(0.0, y - h * 0.3)
+        boxes.append(
+            [round(x0, 4), round(y0, 4), round(min(1.0, x + w * 2) - x0, 4), round(min(1.0, y + h * 3.5) - y0, 4)]
+        )
+    if not boxes:
+        return []
+    largest = max(w * h for _, _, w, h in boxes)
+    return [b for b in boxes if b[2] * b[3] >= FIGURE_MIN * largest]
+
+
 def subject(found, bgr):
-    """构图看的主体：优先人脸，其次人体，最后显著区域。"""
+    """构图看的主体：多人时看整组人，否则优先人脸，其次人体，最后显著区域。
+    `focus` 是最主要的那一个，景深按它比较。"""
+    people = figures(found)
+    if len(people) >= 2:
+        focus = _single(found, bgr)
+        x0 = min(b[0] for b in people)
+        y0 = min(b[1] for b in people)
+        x1 = max(b[0] + b[2] for b in people)
+        y1 = max(b[1] + b[3] for b in people)
+        return {
+            'source': '多人',
+            'box': [round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4)],
+            'point': [round((x0 + x1) / 2, 4), round(y0 + (y1 - y0) * 0.3, 4)],
+            'figures': people,
+            'focus': focus,
+        }
+    return _single(found, bgr)
+
+
+def _single(found, bgr):
+    """单个主体：优先人脸，其次人体，最后显著区域。"""
     if found and found['faces']:
         x, y, w, h = found['faces'][0]['box']
         return {'source': '人脸', 'box': [x, y, w, h], 'point': [x + w / 2, y + h * 0.45]}
@@ -264,10 +312,38 @@ def symmetry(gray):
     return round(max(0.0, 1.0 - difference / 64.0), 3)
 
 
-def composition(main, gray):
-    score = symmetry(gray)
+def group_composition(main, score):
+    """多人：看人分布在画面哪几侧，而不是只看其中一个人。"""
+    centers = [b[0] + b[2] / 2 for b in main['figures']]
+    areas = [b[2] * b[3] for b in main['figures']]
+    left = [i for i, x in enumerate(centers) if x < 0.5 - CENTER_BAND]
+    right = [i for i, x in enumerate(centers) if x > 0.5 + CENTER_BAND]
+    middle = [i for i in range(len(centers)) if i not in left and i not in right]
+    count = len(centers)
+    position = f'{count} 人：左侧 {len(left)} · 居中 {len(middle)} · 右侧 {len(right)}'
+    if left and right:
+        weight = sum(areas[i] for i in left) / max(sum(areas[i] for i in right), 1e-6)
+        balanced = 0.5 <= weight <= 2
+        if middle:
+            label = '对称构图' if balanced else '中心构图'
+            basis = '主体居中，两侧有人物陪衬' + ('，左右分量相当' if balanced else '')
+        else:
+            label = '左右平衡构图' if balanced else '左右分列构图'
+            basis = '人物分列画面两侧（常见于对峙、对话）' if count == 2 else '人物分列画面两侧'
+        return {'label': label, 'position': position, 'space': '', 'symmetry': score, 'basis': basis}
+    # 都在同一侧或都在中间：把整组人当成一个主体
+    single = {'source': '整组人物', 'box': main['box'], 'point': main['point']}
+    result = composition(single, None, score)
+    result['position'] = position + ' · ' + result['position']
+    return result
+
+
+def composition(main, gray, score=None):
+    score = symmetry(gray) if score is None else score
+    if main is not None and main['source'] == '多人':
+        return group_composition(main, score)
     if main is None:
-        structured = float(gray.std()) >= 12  # 一片纯色谈不上对称
+        structured = gray is not None and float(gray.std()) >= 12  # 一片纯色谈不上对称
         return {
             'label': '对称构图' if score >= SYMMETRY_MIN and structured else '',
             'position': '',
@@ -354,9 +430,19 @@ def depth_of_field(gray, main):
             for r in range(rows)
         ]
     )
+    brightness = np.array(
+        [
+            [
+                float(gray[h * r // rows : h * (r + 1) // rows, w * c // cols : w * (c + 1) // cols].mean())
+                for c in range(cols)
+            ]
+            for r in range(rows)
+        ]
+    )
     overall = float(np.percentile(blocks, 98))  # 最清晰的几块：大片天空、白墙不会被当成偏糊
     if overall < BLURRY:
         return {'label': '整体偏糊', 'ratio': None, 'basis': '全画面都缺少清晰细节（可能是运动模糊、失焦或刻意的柔焦）'}
+    main = main.get('focus') if main and main['source'] == '多人' else main
     if main is None:
         return {'label': '无法判断', 'ratio': None, 'basis': '画面没有明显主体'}
     x, y, bw, bh = main['box']
@@ -369,9 +455,13 @@ def depth_of_field(gray, main):
         for c in range(cols):
             cx, cy = (c + 0.5) / cols, (r + 0.5) / rows
             inside[r, c] = x0 <= cx <= x1 and y0 <= cy <= y1
-    if inside.sum() < 1 or (~inside).sum() < 12:
+    # 很暗的区域测不出清晰度（没有细节可比），不参与比较，否则暗背景会被误当成虚化
+    lit = brightness >= DEPTH_DARK
+    if (inside & lit).sum() < 1 or (~inside).sum() < 12:
         return {'label': '无法判断', 'ratio': None, 'basis': '主体占满画面，看不到背景'}
-    ratio = float(np.percentile(blocks[inside], 75) / max(np.median(blocks[~inside]), 0.5))
+    if (~inside & lit).sum() < 12:
+        return {'label': '无法判断', 'ratio': None, 'basis': '背景太暗，无法比较清晰度'}
+    ratio = float(np.percentile(blocks[inside & lit], 75) / max(np.median(blocks[~inside & lit]), 0.5))
     if ratio >= DEPTH_SHALLOW:
         label, basis = '浅景深', '主体清晰、背景明显柔和：多为背景虚化（背景本身平整时也会这样）'
     elif ratio <= DEPTH_DEEP:
