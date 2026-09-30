@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/storage.css">
 <link rel="stylesheet" href="/vendor/cropper-1.6.2.min.css">
 <link rel="stylesheet" href="/collage.css">
+<link rel="stylesheet" href="/layout.css">
 <style>
   :root{
     --accent:#4f46e5; --accent2:#7c3aed; --bg:#f3f4fb; --card:#ffffff;
@@ -161,23 +162,53 @@
 </head>
 <body>
 
-<header>
+<header class="appHeader">
   <h1>🎞️ 视频 Cut 关键帧截取工具</h1>
-  <p>上传视频 → 自动检测镜头切换（cut）→ 一键截取每个新镜头的首帧作为参考图</p>
+  <p>上传视频 → 自动检测镜头切换 → 截取每个镜头的画面作为参考图 · 数据只存在于本机</p>
 </header>
 
-<main>
+<div class="appShell">
+<nav id="appNav" class="appNav" aria-label="功能导航">
+  <button type="button" class="navToggle" id="navToggle" aria-expanded="true" title="收起 / 展开功能导航"><span class="navToggleIcon" aria-hidden="true">☰</span><span class="navText"><span class="navLabel">功能导航</span></span></button>
+  <div class="navGroup"><div class="navGroupTitle">开始</div>
+      <button type="button" class="navItem" data-nav="workspace" title="本地工作区"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="navText"><span class="navLabel">本地工作区</span><span class="navStatus" id="navStatus-workspace"></span></span></button>
+      <button type="button" class="navItem" data-nav="upload" title="选择视频"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2"/></svg><span class="navText"><span class="navLabel">选择视频</span><span class="navStatus" id="navStatus-upload"></span></span></button>
+  </div>
+  <div class="navGroup"><div class="navGroupTitle">分析</div>
+      <button type="button" class="navItem" data-nav="params" title="检测参数"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span class="navText"><span class="navLabel">检测参数</span><span class="navStatus" id="navStatus-params"></span></span></button>
+      <button type="button" class="navItem" data-nav="progress" title="分析进度"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span class="navText"><span class="navLabel">分析进度</span><span class="navStatus" id="navStatus-progress"></span></span></button>
+  </div>
+  <div class="navGroup"><div class="navGroupTitle">修正</div>
+      <button type="button" class="navItem" data-nav="editor" title="预览与手动选帧"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9l5 3-5 3z"/></svg><span class="navText"><span class="navLabel">预览与手动选帧</span><span class="navStatus" id="navStatus-editor"></span></span></button>
+  </div>
+  <div class="navGroup"><div class="navGroupTitle">输出</div>
+      <button type="button" class="navItem" data-nav="results" title="关键帧结果"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="13" width="7" height="7" rx="1"/><rect x="14" y="13" width="7" height="7" rx="1"/></svg><span class="navText"><span class="navLabel">关键帧结果</span><span class="navStatus" id="navStatus-results"></span></span></button>
+      <button type="button" class="navItem" data-nav="download" title="下载所选 (zip)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span class="navText"><span class="navLabel">下载所选 (zip)</span><span class="navStatus" id="navStatus-download"></span></span></button>
+      <button type="button" class="navItem" data-nav="collage" title="制作参考拼图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h18M12 3v18"/></svg><span class="navText"><span class="navLabel">制作参考拼图</span><span class="navStatus" id="navStatus-collage"></span></span></button>
+  </div>
+  <div class="navGroup"><div class="navGroupTitle">管理</div>
+      <button type="button" class="navItem" data-nav="storage" title="空间管理与清理"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span class="navText"><span class="navLabel">空间管理与清理</span><span class="navStatus" id="navStatus-storage"></span></span></button>
+  </div>
+</nav>
+<button type="button" class="navFab" id="navFab" aria-controls="appNav" aria-expanded="false">☰ 功能</button>
+<div class="navScrim" id="navScrim" hidden></div>
+<div class="appColumns">
+<main class="colLeft" id="colLeft" aria-label="素材与工具">
   <section class="card" id="cardWorkspace">
     <div class="toolbar">
-      <div class="info"><b>本地工作区</b> · 找回之前生成的关键帧</div>
+      <button type="button" class="collapseToggle" id="workspaceToggle" aria-expanded="true" aria-controls="workspaceBody">
+        <span class="chev" aria-hidden="true">▾</span><b>本地工作区</b></button>
+      <div class="info">找回之前生成的关键帧</div>
       <button class="btn ghost small" id="btnWorkspace">读取本地工作区</button>
       <button class="btn ghost small" id="btnStorage">空间管理与清理</button>
     </div>
+    <div id="workspaceBody">
     <div class="hint left" id="workspaceInfo">误关网页或重启工具后，可从工作目录恢复。关闭工具窗口后，需要先重新启动工具。</div>
     <div id="workspaceList" hidden></div>
+    </div>
   </section>
   <!-- 1. 上传 -->
-  <section class="card">
+  <section class="card" id="cardUpload">
     <h2><span class="n">1</span>选择视频文件</h2>
     <div id="drop" role="button" tabindex="0" aria-label="选择视频文件">
       <div class="big">点击选择，或将视频拖到这里</div>
@@ -235,18 +266,8 @@
     <div class="hint">参数修改后自动重新分析，已完成的扫描会复用。截图不理想时，可在结果里单张“逐帧微调”。</div>
   </section>
 
-  <!-- 3. 进度 -->
-  <section class="card" id="cardProgress" hidden>
-    <h2><span class="n">3</span>分析中…</h2>
-    <div class="barWrap"><div class="barFill" id="bar"></div></div>
-    <div id="stage" role="status" aria-live="polite">准备中…</div>
-    <button class="btn ghost small" id="btnCancel" hidden>取消分析</button>
-    <button class="btn ghost small" id="btnRetry" hidden>重试连接</button>
-    <div class="hint">首次分析需要逐帧解码，请耐心等待。重新分析期间，已有结果仍可预览和下载。</div>
-  </section>
-
   <section class="card" id="cardEditor" hidden>
-    <h2>视频预览与手动选帧</h2>
+    <h2><span class="n">✎</span>视频预览与手动选帧</h2>
     <div class="editorGrid">
       <div class="previewPane">
         <h3>播放视频，定位需要的画面</h3>
@@ -275,6 +296,27 @@
     </div>
   </section>
 
+  <footer>检测算法：画面逐帧颜色差分 + 闪光抑制 · 下载为原始分辨率 JPEG · 数据只存在于本机</footer>
+</main>
+<section class="colRight" id="colRight" aria-label="关键帧结果">
+  <!-- 3. 进度 -->
+  <section class="card" id="cardProgress" hidden>
+    <h2><span class="n">3</span>分析进度</h2>
+    <div class="barWrap"><div class="barFill" id="bar"></div></div>
+    <div id="stage" role="status" aria-live="polite">准备中…</div>
+    <button class="btn ghost small" id="btnCancel" hidden>取消分析</button>
+    <button class="btn ghost small" id="btnRetry" hidden>重试连接</button>
+    <div class="hint">首次分析需要逐帧解码，请耐心等待。重新分析期间，已有结果仍可预览和下载。</div>
+  </section>
+
+  <section class="card resultsEmpty" id="resultsEmpty">
+    <h2><span class="n">4</span>关键帧结果</h2>
+    <ol class="emptySteps">
+      <li><b>在左侧拖入视频</b>，或从「本地工作区」恢复之前的记录</li>
+      <li><b>自动分析</b>：进度会显示在这里，长视频首次分析需要一些时间</li>
+      <li><b>结果出现在这里</b>：单击卡片保留 / 跳过，单击缩略图看原图，再下载或制作参考拼图</li>
+    </ol>
+  </section>
   <!-- 4. 结果 -->
   <section class="card" id="cardResult" hidden>
     <h2><span class="n">4</span>关键帧结果</h2>
@@ -294,9 +336,9 @@
     <div id="grid"></div>
     <div id="empty" hidden>没有检测到镜头切换，可调高灵敏度，或在上方预览区手动补帧。</div>
   </section>
-</main>
-
-<footer>检测算法：画面逐帧颜色差分 + 闪光抑制 · 下载为原始分辨率 JPEG · 数据只存在于本机</footer>
+</section>
+</div>
+</div>
 
 <!-- 下载进度弹层 -->
 <div class="modal" id="dl" hidden>
@@ -362,6 +404,7 @@
 </div>
 <script src="/app.js"></script>
 <script src="/storage.js"></script>
+<script src="/layout.js"></script>
 <div id="collagePanel" class="collageOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="collageTitle">
   <div class="collageEditor">
     <div class="collageHeader">

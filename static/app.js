@@ -125,6 +125,8 @@ async function upload(file) {
   try {
     const fd = new FormData(); fd.append('file', file);
     const j = await jsonRequest('/api/upload', {method:'POST', body:fd}, 0);
+    // 复制已完成：收起“正在复制”提示，进度改由分析进度显示。
+    if ($('#toast').textContent === '正在复制视频到本机工作目录…') $('#toast').className = '';
     state.sid = j.session_id;
     try { sessionStorage.setItem('kf_sid', state.sid); } catch { /* 可继续处理 */ }
     state.run = state.resultRun = null;
