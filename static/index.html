@@ -332,6 +332,7 @@
       <button class="btn ghost small" id="btnNone">全不选</button>
       <button class="btn ghost small" id="btnSkipSimilar" hidden title="跳过与上一张几乎相同的截图，保留每组的第一张">跳过相似画面</button>
       <button class="btn ghost small" id="btnAnalyze" hidden title="在本机分析每张图的色彩、影调、画幅与明暗分布，不联网">分析画面</button>
+      <a class="btn ghost small" id="btnFixExport" hidden download title="你在大图里做过的纠错：只有测量数值和文字，不含图片，用来校准分析">导出纠错记录</a>
       <button class="btn ghost small" id="btnCollage">制作参考拼图</button>
       <button class="btn" id="btnDownload">⬇ 下载所选关键帧 (zip)</button>
     </div>
@@ -416,7 +417,7 @@
       <button type="button" class="vwChoice keep" id="vwKeep" aria-pressed="true"><kbd>↑</kbd> 保留并下一张</button>
     </div>
     <div class="vwStrip" id="vwStrip" aria-label="全部截图"></div>
-    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · 1 / 2 / 3 首 · 中 · 尾帧 · A 画面分析 · G 辅助线 · E 微调 · D 下载 · Esc 关闭</div>
+    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · 1 / 2 / 3 首 · 中 · 尾帧 · A 画面分析 · C 纠错 · G 辅助线 · E 微调 · D 下载 · Esc 关闭</div>
   </div>
 </div>
 
@@ -481,6 +482,7 @@
 <script src="/viewer.js"></script>
 <script src="/analysis.js"></script>
 <script src="/overview.js"></script>
+<script src="/corrections.js"></script>
 <div id="collagePanel" class="appView" hidden role="region" aria-labelledby="collageTitle">
   <div class="viewHead">
     <button type="button" class="btn ghost small viewBack" id="collageClose">← 返回关键帧结果</button>

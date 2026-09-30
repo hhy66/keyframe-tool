@@ -32,6 +32,7 @@ const Viewer = {
 
   close() {
     if (!this.isOpen()) return;
+    if (typeof Corrections !== 'undefined') Corrections.flush();
     const last = this.index;
     this.el('#lb').hidden = true;
     this.el('#vwImg').removeAttribute('src');
@@ -165,12 +166,30 @@ const Viewer = {
   onKey(event) {
     if (!this.isOpen() || event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target || {};
+    // Esc still closes the viewer from the correction form (it saves on the way out).
+    if (event.key === 'Escape' && target.closest?.('.fixBox')) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.close();
+      return;
+    }
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) && target.type !== 'checkbox') return;
+    // In the correction form, Space and Enter tick a box or open a section as usual.
+    if (target.closest?.('.fixBox') && [' ', 'Enter'].includes(event.key)) return;
     // Letters follow the physical key so they also work with a Chinese input method on.
     const key =
-      {KeyA: 'a', KeyG: 'g', KeyE: 'e', KeyD: 'd', KeyX: 'x', Digit0: '0', Digit1: '1', Digit2: '2', Digit3: '3'}[
-        event.code
-      ] || event.key.toLowerCase();
+      {
+        KeyA: 'a',
+        KeyC: 'c',
+        KeyG: 'g',
+        KeyE: 'e',
+        KeyD: 'd',
+        KeyX: 'x',
+        Digit0: '0',
+        Digit1: '1',
+        Digit2: '2',
+        Digit3: '3',
+      }[event.code] || event.key.toLowerCase();
     const actions = {
       arrowleft: () => this.show(this.neighbor(this.index, -1)),
       arrowright: () => this.show(this.neighbor(this.index, 1)),
@@ -183,6 +202,7 @@ const Viewer = {
       e: () => this.edit(),
       a: () => typeof Analysis !== 'undefined' && Analysis.togglePanel(),
       g: () => typeof Analysis !== 'undefined' && Analysis.toggleGuides(),
+      c: () => typeof Corrections !== 'undefined' && Corrections.toggle(),
       0: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(0),
       1: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(1),
       2: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(2),

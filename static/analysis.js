@@ -115,6 +115,7 @@ const Analysis = {
     this.stripMissing = 0;
     this.status = 'idle';
     this.job = null;
+    if (typeof Corrections !== 'undefined') Corrections.accept({});
     this.paint();
     if (!state.sid || !this.run) return;
     let data;
@@ -136,6 +137,7 @@ const Analysis = {
     this.shots = data.shots || [];
     this.stripMissing = (data.strip_missing || 0) + (data.motion_missing || 0);
     this.video = data.video !== false;
+    if (typeof Corrections !== 'undefined') Corrections.accept(data);
     this.paint();
   },
 
@@ -277,6 +279,7 @@ const Analysis = {
     (state.cards || []).forEach((card, i) => {
       card.item.querySelector('.anaRow')?.remove();
       card.item.querySelector('.shotRow')?.remove();
+      if (typeof Corrections !== 'undefined') Corrections.paintCard(i);
       const shot = this.shotRow(i);
       const item = this.items[i];
       if (!item) {
@@ -501,6 +504,7 @@ const Analysis = {
     const heading = document.createElement('h3');
     heading.textContent = '画面分析';
     panel.appendChild(heading);
+    if (typeof Corrections !== 'undefined') Corrections.section(i, panel);
     this.shotSection(i, panel);
     const item = this.items[i];
     if (!item) {
