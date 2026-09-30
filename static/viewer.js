@@ -40,6 +40,10 @@ const Viewer = {
     const count = this.count();
     if (!count) return this.close();
     i = Math.max(0, Math.min(count - 1, i));
+    // A new picture always opens on its keyframe, not on the previous shot's first or last frame.
+    if (typeof Analysis !== 'undefined') Analysis.viewing = 0;
+    this.el('#vwFrameTag').hidden = true;
+    this.el('#vwImg').onerror = null;
     this.index = i;
     state.lbIndex = i;
     const cut = state.cuts[i];
@@ -156,7 +160,10 @@ const Viewer = {
     const target = event.target || {};
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) && target.type !== 'checkbox') return;
     // Letters follow the physical key so they also work with a Chinese input method on.
-    const key = {KeyA: 'a', KeyG: 'g', KeyE: 'e', KeyD: 'd', KeyX: 'x'}[event.code] || event.key.toLowerCase();
+    const key =
+      {KeyA: 'a', KeyG: 'g', KeyE: 'e', KeyD: 'd', KeyX: 'x', Digit0: '0', Digit1: '1', Digit2: '2', Digit3: '3'}[
+        event.code
+      ] || event.key.toLowerCase();
     const actions = {
       arrowleft: () => this.show(this.index - 1),
       arrowright: () => this.show(this.index + 1),
@@ -169,6 +176,10 @@ const Viewer = {
       e: () => this.edit(),
       a: () => typeof Analysis !== 'undefined' && Analysis.togglePanel(),
       g: () => typeof Analysis !== 'undefined' && Analysis.toggleGuides(),
+      0: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(0),
+      1: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(1),
+      2: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(2),
+      3: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(3),
       d: () => this.el('#vwDownload').click(),
       escape: () => this.close(),
     };

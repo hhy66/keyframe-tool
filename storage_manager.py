@@ -17,6 +17,7 @@ from collage_engine import managed_file
 
 MANAGEMENT = '.storage'
 ANALYSIS_FILE = 'analysis.json'  # 画面分析结果，与 server.ANALYSIS_FILE 相同
+STRIP_DIR = 'strip'  # 镜头首 / 中 / 尾帧小图，与 server.STRIP_DIR 相同
 
 
 def now():
@@ -233,7 +234,11 @@ class Manager:
         cache = ses.get('cache_file')
         vp = tree(video) if video else []
         # 画面分析结果和扫描缓存一样可以重新计算，一起算作缓存。
-        cp = (tree(store.safe_path(d, cache)) if cache else []) + tree(store.safe_path(d, ANALYSIS_FILE))
+        cp = (
+            (tree(store.safe_path(d, cache)) if cache else [])
+            + tree(store.safe_path(d, ANALYSIS_FILE))
+            + tree(store.safe_path(d, STRIP_DIR))
+        )
         tmp = [
             x
             for x in tree(store.safe_path(d, 'exports'))
@@ -406,7 +411,7 @@ class Manager:
             elif kind == 'video':
                 paths = [Path(ses['video_path']).name] if ses.get('video_path') else []
             elif kind == 'cache':
-                paths = ([ses['cache_file']] if ses.get('cache_file') else []) + [ANALYSIS_FILE]
+                paths = ([ses['cache_file']] if ses.get('cache_file') else []) + [ANALYSIS_FILE, STRIP_DIR]
             elif kind == 'session':
                 paths = ['.']
             else:
@@ -428,6 +433,8 @@ class Manager:
                     if rel.startswith('exports/')
                     else '画面分析结果'
                     if rel == ANALYSIS_FILE
+                    else '镜头首 / 中 / 尾帧小图'
+                    if rel == STRIP_DIR
                     else {
                         'session': '整条工作记录（含全部版本及未知文件）',
                         'video': '工作区中的视频副本',

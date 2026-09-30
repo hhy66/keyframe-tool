@@ -27,6 +27,7 @@ from pathlib import Path
 import cv2
 import frame_analysis
 import numpy as np
+import shots
 import uvicorn
 import workspace_store
 import storage_manager
@@ -463,7 +464,8 @@ def preview(sid: str, frame_index: int | None = None, time: float | None = None)
 
 @app.get("/api/preview-image/{sid}/{frame_index}")
 @_storage_guard
-def preview_image(sid: str, frame_index: int):
+def preview_image(sid: str, frame_index: int, download: bool = False):
+    """任意一帧的原分辨率画面；download=true 时作为文件下载（镜头首帧、尾帧原图用）。"""
     ses = _session(sid)
     if not ses["worker_lock"].acquire(blocking=False):
         raise HTTPException(409, "视频正忙，请稍后再试")
@@ -481,7 +483,11 @@ def preview_image(sid: str, frame_index: int):
         ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])
         if not ok:
             raise HTTPException(500, "预览图片编码失败")
-        return Response(encoded.tobytes(), media_type="image/jpeg")
+        headers = {}
+        if download:
+            label = _fmt_time(float(ses["cache"]["times"][frame_index])).replace(":", "-")
+            headers["Content-Disposition"] = f'attachment; filename="frame{frame_index + 1:06d}_{label}.jpg"'
+        return Response(encoded.tobytes(), media_type="image/jpeg", headers=headers)
     finally:
         ses["worker_lock"].release()
 
@@ -810,9 +816,11 @@ def similar(sid: str, run: str):
     return _similar_cache[key]
 
 
-# ---------------------------------------------------------------- 画面分析
-# 按钮触发，后台逐张计算；结果按图片文件记在工作目录的 analysis.json，微调过的图只重算那一张。
+# ---------------------------------------------------------------- 画面分析与镜头
+# 按钮触发，后台先截每个镜头的首 / 中 / 尾帧小图（strip/，按帧号存放），再逐张分析截图；
+# 分析结果按图片文件记在工作目录的 analysis.json，微调过的图只重算那一张。
 ANALYSIS_FILE = "analysis.json"
+STRIP_DIR = "strip"
 _analysis_items: dict[str, dict] = {}  # session_id -> {"run/编号": 分析结果}
 _analysis_jobs: dict[str, dict] = {}  # session_id -> {run, status, done, total, failed, error}
 _analysis_write = threading.Lock()
@@ -852,9 +860,40 @@ def _save_analysis(sid, items):
         )
 
 
-def _run_analysis(sid, job, todo, items):
+def _spans(ses, result):
+    return shots.spans(result, ses.get("cache", {}).get("times"))
+
+
+def _has_video(ses):
+    path = ses.get("video_path")
+    return bool(path) and Path(path).is_file()
+
+
+def _strip_frames(ses, result):
+    return [frame for span in _spans(ses, result) if span for frame in span["strip"]]
+
+
+def _live_strip_frames(ses):
+    return {frame for res in ses.get("results", {}).values() for frame in _strip_frames(ses, res)}
+
+
+def _run_analysis(sid, job, todo, items, strip=None):
     status, error = "done", ""
     try:
+        offset = 0
+        if strip:
+            video, frames = strip
+            root = workspace_store.safe_path(WORK, sid, STRIP_DIR)
+
+            def progress(n, total):
+                job["done"] = n
+
+            job["strip_failed"] = len(shots.extract(video, frames, root, progress))
+            offset = job["done"]
+            with _lock:
+                ses = _sessions.get(sid)
+                if ses is not None:
+                    shots.prune(root, _live_strip_frames(ses))
         for n, (key, path) in enumerate(todo, 1):
             try:
                 # np.fromfile + imdecode 支持 Windows 中文路径
@@ -862,7 +901,7 @@ def _run_analysis(sid, job, todo, items):
                 items[key] = frame_analysis.analyze(image)
             except (OSError, ValueError, cv2.error):
                 job["failed"] += 1
-            job["done"] = n
+            job["done"] = offset + n
             if n % 25 == 0:
                 _save_analysis(sid, items)
         _save_analysis(sid, items)
@@ -876,24 +915,39 @@ def _run_analysis(sid, job, todo, items):
 
 
 def _analysis_state(sid, run, items=True):
-    result = _session(sid).get("results", {}).get(run)
+    ses = _session(sid)
+    result = ses.get("results", {}).get(run)
     if not result:
         raise HTTPException(404, "结果已更新，请刷新")
     cache = _analysis_cache(sid)
     found = [cache.get(_asset_key(result, i)) for i in range(len(result["cuts"]))]
     ready = sum(item is not None for item in found)
+    spans = _spans(ses, result)
+    root = workspace_store.safe_path(WORK, sid, STRIP_DIR)
+    # 原视频被清理后截不了镜头小图：不算未完成，页面会说明
+    strip_missing = len(shots.missing(root, _strip_frames(ses, result))) if _has_video(ses) else 0
     job = _analysis_jobs.get(sid)
     running = bool(job and job["status"] == "running")
     state = {
         "run": run,
         "version": frame_analysis.ANALYSIS_VERSION,
-        "status": "running" if running else "done" if ready == len(found) else "idle",
+        "status": "running" if running else "done" if ready == len(found) and not strip_missing else "idle",
         "ready": ready,
         "total": len(found),
-        "job": {key: job[key] for key in ("run", "done", "total", "failed", "error", "status")} if job else None,
+        "strip_missing": strip_missing,
+        "video": _has_video(ses),
+        "job": {key: job.get(key) for key in ("run", "done", "total", "failed", "strip_failed", "error", "status")}
+        if job
+        else None,
     }
     if items:
         state["items"] = found
+        state["shots"] = [
+            None
+            if span is None
+            else {**span, "strip_ready": [shots.strip_path(root, frame).is_file() for frame in span["strip"]]}
+            for span in spans
+        ]
     return state
 
 
@@ -925,13 +979,35 @@ def start_analysis(sid: str, payload: dict):
         if key not in items and key not in todo:
             todo[key] = workspace_store.asset_path(WORK, sid, result, i)
     todo = list(todo.items())
-    job = {"run": run, "status": "running" if todo else "done", "done": 0, "total": len(todo), "failed": 0, "error": ""}
+    frames = shots.missing(workspace_store.safe_path(WORK, sid, STRIP_DIR), _strip_frames(ses, result))
+    strip = (ses["video_path"], frames) if frames and _has_video(ses) else None
+    work = len(todo) + (len(frames) if strip else 0)
+    job = {
+        "run": run,
+        "status": "running" if work else "done",
+        "done": 0,
+        "total": work,
+        "failed": 0,
+        "strip_failed": 0,
+        "error": "",
+    }
     _analysis_jobs[sid] = job
-    if todo:
+    if work:
         # 计算期间占用这条记录：旧图不会被回收，空间管理也不会清理它。
         _storage.active[sid] = _storage.active.get(sid, 0) + 1
-        threading.Thread(target=_run_analysis, args=(sid, job, todo, items), daemon=True).start()
+        threading.Thread(target=_run_analysis, args=(sid, job, todo, items, strip), daemon=True).start()
     return _analysis_state(sid, run, items=False)
+
+
+@app.get("/api/strip/{sid}/{frame}")
+@_storage_guard
+def strip_image(sid: str, frame: int):
+    """镜头的首 / 中 / 尾帧小图（按视频帧号）。"""
+    _session(sid)
+    path = shots.strip_path(workspace_store.safe_path(WORK, sid, STRIP_DIR), _integer(frame))
+    if frame < 0 or not path.is_file():
+        raise HTTPException(404, "镜头小图不存在，请点「分析画面」生成")
+    return _file_response(sid, path, media_type="image/jpeg")
 
 
 @app.get("/api/thumb/{sid}/{run}/{i}")
@@ -1007,7 +1083,12 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
     fd, name = tempfile.mkstemp(suffix=".zip", dir=export_dir)
     os.close(fd)
     path = Path(name)
-    lines = ["# 关键帧列表（零基帧号及实际时间码）", f"# 视频: {result['video_name']}"]
+    lines = [
+        "# 关键帧列表（零基帧号及实际时间码）；镜头起止为该截图所在镜头",
+        f"# 视频: {result['video_name']}",
+        "# 文件\t时间码\t类型\t帧号\t镜头开始\t镜头结束\t镜头时长(秒)",
+    ]
+    spans = _spans(_session(sid), result)
     try:
         with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
             for i in wanted:
@@ -1015,7 +1096,11 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
                 stem = f"{i + 1:03d}_{label}"
                 archive.write(paths[i], f"{stem}.jpg")
                 index = cuts[i]["frame_index"] if cuts[i]["frame_index"] is not None else "unknown"
-                lines.append(f"{stem}.jpg\t{cuts[i]['label']}\t{cuts[i]['kind']}\t{index}")
+                span = spans[i]
+                timing = (
+                    f"\t{_fmt_time(span['start'])}\t{_fmt_time(span['end'])}\t{span['duration']:.2f}" if span else ""
+                )
+                lines.append(f"{stem}.jpg\t{cuts[i]['label']}\t{cuts[i]['kind']}\t{index}{timing}")
             archive.writestr("cuts.txt", "\n".join(lines))
     except Exception:
         path.unlink(missing_ok=True)
@@ -1278,7 +1363,9 @@ def render_all_collages(sid: str, payload: dict):
                 collage_engine.render(plan, [by_id[i] for i in page['ids']], page, scratch, None)
                 archive.write(scratch, f"参考拼图_{video_name}_{page['page']:02d}.{ext}")
                 scratch.unlink()
-            archive.writestr('分镜表.csv', collage_engine.storyboard_csv(payload, result['cuts']))
+            archive.writestr(
+                '分镜表.csv', collage_engine.storyboard_csv(payload, result['cuts'], _spans(_session(sid), result))
+            )
         filename = f'参考拼图_{video_name}_共{len(pages)}张.zip'
         workspace_store.atomic_json(
             metadata,
@@ -1315,7 +1402,7 @@ def collage_storyboard(sid: str, payload: dict):
     _collage_options(payload)
     name = quote(f'分镜表_{_collage_video_name(sid)}.csv')
     return Response(
-        collage_engine.storyboard_csv(payload, result['cuts']),
+        collage_engine.storyboard_csv(payload, result['cuts'], _spans(_session(sid), result)),
         media_type='text/csv; charset=utf-8',
         headers={'Content-Disposition': f"attachment; filename*=UTF-8''{name}"},
     )

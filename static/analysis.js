@@ -55,9 +55,33 @@ function analysisRows(item) {
   };
 }
 
+// Clock time of a shot boundary: 00:01:02.345 → "01:02.3" (hours only when needed).
+function shotClock(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = (seconds % 60).toFixed(1).padStart(4, '0');
+  return (hours ? `${hours}:${String(minutes).padStart(2, '0')}` : String(minutes).padStart(2, '0')) + `:${rest}`;
+}
+
+// Text for one shot: its length, where it starts and ends, and how many frames it has. Pure, for tests.
+function shotSummary(span) {
+  const seconds = span.duration;
+  return {
+    length: seconds < 10 ? `${seconds.toFixed(1)} 秒` : `${Math.round(seconds)} 秒`,
+    range: `${shotClock(span.start)} – ${shotClock(span.end)}`,
+    frames: `${span.frames} 帧`,
+  };
+}
+
+const SHOT_VIEWS = ['关键帧', '首帧', '中间', '尾帧'];
+
 const Analysis = {
   run: null,
   items: [],
+  shots: [],
+  stripMissing: 0,
+  video: true,
+  viewing: 0, // what the viewer shows: 0 the keyframe, 1–3 the shot's first / middle / last frame
   status: 'idle',
   job: null,
   token: 0,
@@ -87,6 +111,8 @@ const Analysis = {
     clearTimeout(this.timer);
     this.run = res?.run || null;
     this.items = [];
+    this.shots = [];
+    this.stripMissing = 0;
     this.status = 'idle';
     this.job = null;
     this.paint();
@@ -107,6 +133,9 @@ const Analysis = {
     this.job = data.job;
     if (!data.items) return this.paintButton(); // progress only
     this.items = data.items;
+    this.shots = data.shots || [];
+    this.stripMissing = data.strip_missing || 0;
+    this.video = data.video !== false;
     this.paint();
   },
 
@@ -168,6 +197,8 @@ const Analysis = {
       toast(
         `画面分析完成：${data.ready} / ${data.total} 张` +
           (job.failed ? `，${job.failed} 张图片读取失败` : '') +
+          (job.strip_failed ? `，${job.strip_failed} 个镜头画面读取失败` : '') +
+          (data.video ? '' : '；原视频已清理，无法截取镜头首 / 中 / 尾帧') +
           '。单击缩略图可在大图里查看详细分析。',
       );
   },
@@ -194,20 +225,62 @@ const Analysis = {
       const job = this.job;
       button.textContent = job?.total ? `分析中 ${job.done}/${job.total}…` : '分析中…';
       button.disabled = true;
-    } else if (!missing) {
+    } else if (!missing && !this.stripMissing) {
       button.textContent = '✓ 画面已分析';
       button.disabled = true;
     } else {
-      button.textContent = missing < total ? `分析新增的 ${missing} 张` : '分析画面';
+      button.textContent = !missing ? '补全镜头画面' : missing < total ? `分析新增的 ${missing} 张` : '分析画面';
       button.disabled = false;
     }
+  },
+
+  stripUrl(frame) {
+    return `/api/strip/${encodeURIComponent(state.sid)}/${frame}`;
+  },
+
+  // The shot under the picture: its length, and first → middle → last frames once they are extracted.
+  shotRow(i) {
+    const span = this.shots[i];
+    if (!span) return null;
+    const row = document.createElement('div');
+    row.className = 'shotRow';
+    if (span.strip_ready.every(Boolean)) {
+      const strip = document.createElement('div');
+      strip.className = 'shotStrip';
+      span.strip.forEach((frame, k) => {
+        const image = document.createElement('img');
+        image.loading = 'lazy';
+        image.src = this.stripUrl(frame);
+        image.alt = SHOT_VIEWS[k + 1];
+        image.title = `${SHOT_VIEWS[k + 1]}（第 ${frame + 1} 帧）：单击看大图`;
+        image.addEventListener('click', event => {
+          event.stopPropagation();
+          openLb(i);
+          this.viewFrame(k + 1);
+        });
+        strip.appendChild(image);
+      });
+      row.appendChild(strip);
+    }
+    const length = document.createElement('span');
+    length.className = 'shotLength';
+    const summary = shotSummary(span);
+    length.textContent = `镜头 ${summary.length}`;
+    length.title = `${summary.range} · ${summary.frames}`;
+    row.appendChild(length);
+    return row;
   },
 
   paintCards() {
     (state.cards || []).forEach((card, i) => {
       card.item.querySelector('.anaRow')?.remove();
+      card.item.querySelector('.shotRow')?.remove();
+      const shot = this.shotRow(i);
       const item = this.items[i];
-      if (!item) return;
+      if (!item) {
+        if (shot) card.cap.after(shot);
+        return;
+      }
       const row = document.createElement('div');
       row.className = 'anaRow';
       row.title = '画面分析（单击缩略图查看详情）';
@@ -222,6 +295,7 @@ const Analysis = {
       }
       row.appendChild(tags);
       card.cap.after(row);
+      if (shot) card.cap.after(shot);
     });
   },
 
@@ -269,7 +343,8 @@ const Analysis = {
     const svg = this.el('#vwGuides');
     const button = this.el('#vwGuideBtn');
     if (!svg || i == null) return;
-    const item = this.items[i];
+    // The guides belong to the analysed keyframe, not to the shot's other frames.
+    const item = this.viewing ? null : this.items[i];
     const on = this.guidesOn();
     button.setAttribute('aria-pressed', String(on));
     button.disabled = !item;
@@ -310,6 +385,104 @@ const Analysis = {
     }
   },
 
+  // Show the keyframe (0) or the shot's first / middle / last frame (1–3) in the viewer, at full size.
+  viewFrame(which) {
+    if (typeof Viewer === 'undefined' || !Viewer.isOpen()) return;
+    const i = Viewer.index;
+    const span = this.shots[i];
+    if (which && !span) return;
+    this.viewing = which;
+    const image = this.el('#vwImg');
+    const tag = this.el('#vwFrameTag');
+    if (which) {
+      const frame = span.strip[which - 1];
+      image.onerror = () => {
+        image.onerror = null;
+        toast('这一帧暂时读不出来：可能正在分析，或原视频已清理', true);
+      };
+      image.src = `/api/preview-image/${encodeURIComponent(state.sid)}/${frame}`;
+      tag.textContent = `${SHOT_VIEWS[which]} · 第 ${frame + 1} 帧（按 0 回到关键帧）`;
+    } else {
+      image.onerror = null;
+      image.src = state.frames[i];
+    }
+    tag.hidden = !which;
+    this.paintViewer(i);
+  },
+
+  shotSection(i, panel) {
+    const span = this.shots[i];
+    if (!span) return;
+    const box = document.createElement('section');
+    const name = document.createElement('h4');
+    name.textContent = '镜头';
+    box.appendChild(name);
+    const strip = document.createElement('div');
+    strip.className = 'shotPick';
+    SHOT_VIEWS.forEach((label, which) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'shotPickItem';
+      button.setAttribute('aria-pressed', String(this.viewing === which));
+      button.title = `${label}（按 ${which}）`;
+      const frame = which ? span.strip[which - 1] : null;
+      const ready = !which || span.strip_ready[which - 1];
+      const image = document.createElement('img');
+      image.alt = '';
+      image.src = which ? (ready ? this.stripUrl(frame) : '') : state.thumbs[i];
+      if (!ready) image.removeAttribute('src');
+      const caption = document.createElement('span');
+      caption.textContent = label;
+      button.append(image, caption);
+      button.addEventListener('click', () => this.viewFrame(which));
+      strip.appendChild(button);
+    });
+    box.appendChild(strip);
+    const summary = shotSummary(span);
+    const list = document.createElement('dl');
+    for (const [label, value] of [
+      ['时长', summary.length],
+      ['起止', summary.range],
+      ['帧数', summary.frames],
+    ]) {
+      const term = document.createElement('dt');
+      term.textContent = label;
+      const detail = document.createElement('dd');
+      detail.textContent = value;
+      list.append(term, detail);
+    }
+    box.appendChild(list);
+    // Full-size first and last frames: what AI video tools take for "first and last frame" generation.
+    const links = document.createElement('div');
+    links.className = 'shotLinks';
+    for (const [which, label] of [
+      [1, '下载首帧原图'],
+      [3, '下载尾帧原图'],
+    ]) {
+      const link = document.createElement('a');
+      link.className = 'vwBtn';
+      link.textContent = label;
+      link.href = `/api/preview-image/${encodeURIComponent(state.sid)}/${span.strip[which - 1]}?download=true`;
+      link.download = '';
+      if (typeof Confirm !== 'undefined')
+        Confirm.guardLink(link, () => ({
+          kind: 'download',
+          title: `${label.slice(2)}？`,
+          message: `第 ${span.strip[which - 1] + 1} 帧，原始分辨率 JPEG，可用作 AI 视频的首尾帧参考。`,
+          ok: '下载',
+        }));
+      links.appendChild(link);
+    }
+    box.appendChild(links);
+    if (!span.strip_ready.every(Boolean)) {
+      const note = document.createElement('p');
+      note.className = 'anaFoot';
+      note.textContent = this.video ? '点「分析画面」生成首 / 中 / 尾帧小图。' : '原视频已清理，无法截取镜头画面。';
+      box.appendChild(note);
+    }
+    panel.appendChild(box);
+  },
+
   paintViewer(i) {
     this.paintGuides(i);
     const panel = this.el('#vwAnalysis');
@@ -323,6 +496,7 @@ const Analysis = {
     const heading = document.createElement('h3');
     heading.textContent = '画面分析';
     panel.appendChild(heading);
+    this.shotSection(i, panel);
     const item = this.items[i];
     if (!item) {
       const note = document.createElement('p');

@@ -75,3 +75,17 @@ test('the page has the button, the viewer toggle and the panel', () => {
     assert.match(html, new RegExp(`id="${id}"`), id);
   assert.match(html, /<script src="\/analysis\.js"><\/script>/);
 });
+
+test('a shot reads as its length, start – end and frame count', () => {
+  const {shotSummary, shotClock} = load();
+  const summary = JSON.parse(JSON.stringify(shotSummary({duration: 2.44, start: 61.2, end: 63.64, frames: 61})));
+  assert.deepEqual(summary, {length: '2.4 秒', range: '01:01.2 – 01:03.6', frames: '61 帧'});
+  assert.equal(shotSummary({duration: 14.6, start: 0, end: 14.6, frames: 365}).length, '15 秒');
+  assert.equal(shotClock(3725.25), '1:02:05.3');
+});
+
+test('the viewer has the shot frame tag and number keys are documented', () => {
+  const html = fs.readFileSync('static/index.html', 'utf8');
+  assert.match(html, /id="vwFrameTag"/);
+  assert.match(html, /首帧 \/ 中间帧 \/ 尾帧/);
+});
