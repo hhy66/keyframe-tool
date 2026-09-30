@@ -204,3 +204,41 @@ class CalibrationRoundOneTests(unittest.TestCase):
         self.assertEqual(name((40, 80, 230)), '蓝')
         self.assertEqual(name((230, 40, 40)), '红')
         self.assertEqual(name((40, 180, 70)), '绿')
+
+
+class CalibrationRoundTwoTests(unittest.TestCase):
+    """Cases from five real music-video frames: close-ups, a small centred singer, neon at night."""
+
+    def test_chest_up_is_a_close_shot_not_a_close_up(self):
+        self.assertEqual(sa.shot_from_face(0.45), '近景')
+        self.assertEqual(sa.shot_from_face(0.55), '特写')
+
+    def test_small_faces_are_found_on_the_sharper_picture(self):
+        image = canvas((60, 70, 80), (1080, 1920))
+        image[600:720, 900:1020] = cv2.resize(ASTRONAUT, (120, 120))  # face about 25 px high on 640 px
+        faces = fa.analyze(image)['people']['faces']
+        self.assertEqual(len(faces), 1)
+        self.assertAlmostEqual(faces[0]['box'][0] + faces[0]['box'][2] / 2, 0.5, delta=0.05)
+
+    def test_black_night_does_not_dilute_saturation(self):
+        image = canvas((8, 8, 8))
+        image[200:360, 300:980] = (180, 40, 230)  # neon magenta, 12% of the frame
+        self.assertNotIn(fa.analyze(image)['color']['saturation']['label'], ('低饱和', '接近黑白'))
+
+    def test_warm_skin_in_a_cool_scene_is_a_warm_cool_contrast(self):
+        image = canvas((90, 70, 20))  # dark teal
+        image[250:420, 560:720] = (120, 150, 200)  # warm skin tone, about 3%
+        result = fa.analyze(image)['color']
+        self.assertEqual(result['temperature']['label'], '冷调')
+        self.assertEqual(result['harmony']['label'], '冷暖对比')
+
+    def test_blurred_bright_bokeh_behind_a_sharp_face_is_shallow(self):
+        rng = np.random.default_rng(5)
+        image = canvas((30, 20, 40))
+        for _ in range(40):  # bright neon lights, then heavily blurred
+            x, y = int(rng.integers(0, 1280)), int(rng.integers(0, 720))
+            cv2.circle(image, (x, y), int(rng.integers(20, 60)), (int(rng.integers(150, 255)), 80, 230), -1)
+        image = cv2.GaussianBlur(image, (0, 0), 12)
+        image[150:650, 440:840] = cv2.resize(ASTRONAUT, (400, 500))
+        result = fa.analyze(image)
+        self.assertEqual(result['depth']['label'], '浅景深')
