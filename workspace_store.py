@@ -154,7 +154,8 @@ def save(root, sid, ses, result=None):
                     manual_additions=sorted(ses.get('manual_additions', set())),
                     manual_adjustments={str(k):v for k,v in ses.get('manual_adjustments', {}).items()},
                     pending_delete=ses.get('pending_delete', []),
-                    excluded=list(ses.get('excluded', [])))
+                    excluded=list(ses.get('excluded', [])),
+                    collage=ses.get('collage', {}))
     atomic_json(safe_path(root, sid, 'manifest.json'), manifest)
     ses['cache_file'] = cache_name
     ses['latest_run'] = latest
@@ -211,6 +212,7 @@ def load(root, sid, load_cache=True):
                    manual_adjustments={int(k):v for k,v in data.get('manual_adjustments', {}).items()},
                    excluded=data.get('excluded', []), updated_at=data.get('updated_at'), legacy=False,
                    pending_delete=data.get('pending_delete', []),
+                   collage=data.get('collage') if isinstance(data.get('collage'), dict) else {},
                    workspace_note=f'{missing} 张原图缺失，不能导出缺失图片' if missing else '')
         if video is None:
             ses['workspace_note'] += ' 原视频缺失，仅可查看和导出已有截图'

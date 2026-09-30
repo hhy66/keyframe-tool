@@ -507,6 +507,38 @@ def save_selection(sid: str, payload: dict):
     return {"ok": True, "excluded": ses["excluded"]}
 
 
+@app.get("/api/workspace/{sid}/collage")
+@_storage_guard
+def load_collage_draft(sid: str):
+    import collage_engine
+    ses = _session(sid)
+    try:
+        draft = collage_engine.clean_draft(ses.get("collage") or {})
+    except ValueError:
+        draft = {"ids": [], "crops": {}, "notes": {}}   # 损坏的草稿不阻止使用，重新开始即可
+    return {"draft": draft, "saved": bool(ses.get("collage"))}
+
+
+@app.put("/api/workspace/{sid}/collage")
+@_storage_guard
+def save_collage_draft(sid: str, payload: dict):
+    """拼图草稿（顺序、裁剪、备注）随工作区保存，换浏览器、刷新或重启后都能恢复。"""
+    import collage_engine
+    ses = _session(sid)
+    try:
+        draft = collage_engine.clean_draft(payload.get("draft"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    with _lock:
+        staged = {**ses, "collage": draft}
+        try:
+            _persist_session(sid, staged)
+        except Exception as exc:
+            raise HTTPException(500, "保存拼图草稿失败，已保留之前记录") from exc
+        ses.update({key: staged[key] for key in ("collage", "cache_file", "latest_run", "updated_at")})
+    return {"ok": True}
+
+
 def _preview_ready(sid, ses):
     if (_jobs.get(sid) or {}).get("status") == "running":
         raise HTTPException(409, "正在分析，请完成后再预览或编辑")

@@ -38,6 +38,7 @@ function collageStorage(action) {
 const CollageUI = {
   snapshot: null, ids: [], page: 0, token: 0, busy: false, abort: null, dragId: null, plan: null, output: null,
   crops: {}, notes: {}, noteInputs: new Map(), stageView: null, focus: null, cropper: null, cropId: null, cropToken: 0,
+  draftToken: 0, draftLoaded: false, touched: false, foreignNotes: {}, saveTimer: null, legacyKey: null,
 
   el(selector) { return document.querySelector(selector); },
   node(tag, text, cls) {
@@ -61,15 +62,16 @@ const CollageUI = {
     this.snapshot = {sid: state.sid, run: state.resultRun, name: this.el('#mName').textContent || 'video',
       cuts: state.cuts.map(c => ({...c})), thumbs: [...state.thumbs], frames: [...state.frames]};
     this.ids = [...state.sel].filter(i => this.available(i)).sort((a, b) => a - b);
-    this.page = 0; this.crops = {}; this.focus = null;
-    this.notes = this.loadNotes();
+    this.page = 0; this.crops = {}; this.notes = {}; this.focus = null;
     this.restoreSettings();
     this.el('#collageTitleText').value = '';
     this.el('#collageSource').textContent = `${this.snapshot.name} · 基于打开面板时的关键帧结果`;
     this.el('#collagePanel').hidden = false;
     this.renderLists(); this.summary(); this.queuePlan();
+    this.loadDraft(this.snapshot);
   },
   close() {
+    this.flushSave();
     this.closeCrop(); this.closeResult(); this.invalidate();
     this.el('#collagePanel').hidden = true;
   },
@@ -78,7 +80,7 @@ const CollageUI = {
       && this.snapshot.cuts[i].available !== false && !!this.snapshot.frames[i];
   },
 
-  // ------------------------------------------------------------------ remembered settings and notes
+  // ------------------------------------------------------------------ remembered settings
   restoreSettings() {
     const saved = collageStorage(storage => JSON.parse(storage.getItem(COLLAGE_SETTINGS_KEY) || '{}')) || {};
     for (const [selector, property, allowed, fallback] of COLLAGE_SETTINGS) {
@@ -91,20 +93,87 @@ const CollageUI = {
     const values = Object.fromEntries(COLLAGE_SETTINGS.map(([selector, property]) => [selector, this.el(selector)[property]]));
     collageStorage(storage => storage.setItem(COLLAGE_SETTINGS_KEY, JSON.stringify(values)));
   },
-  notesKey() { return `keyframe-tool.collage.notes.${this.snapshot.sid}.${this.snapshot.run}`; },
-  loadNotes() {
-    const saved = collageStorage(storage => JSON.parse(storage.getItem(this.notesKey()) || '{}')) || {};
+  // ------------------------------------------------------------------ draft kept in the workspace
+  // Order, crops and notes are saved with the video on disk, keyed like the skip state, so they
+  // survive a refresh, another browser, a restart and a new analysis of the same video.
+  frameKey(i) {
+    const cut = this.snapshot.cuts[i];
+    return String(cut.source_frame ?? cut.frame_index ?? `legacy:${this.snapshot.run}:${cut.file_index ?? i}`);
+  },
+  draftBody() {
+    const keyed = values => Object.fromEntries(Object.entries(values)
+      .filter(([id]) => this.available(Number(id))).map(([id, value]) => [this.frameKey(Number(id)), value]));
+    const notes = Object.fromEntries(Object.entries(keyed(this.notes)).map(([key, text]) => [key, text.trim()]).filter(([, text]) => text));
+    return {ids: this.ids.map(i => this.frameKey(i)), crops: keyed(this.crops), notes: {...this.foreignNotes, ...notes}};
+  },
+  legacyNotes() {
+    // Notes kept only in this browser by the previous version; moved into the workspace once.
+    this.legacyKey = `keyframe-tool.collage.notes.${this.snapshot.sid}.${this.snapshot.run}`;
+    const saved = collageStorage(storage => JSON.parse(storage.getItem(this.legacyKey) || '{}')) || {};
     return Object.fromEntries(Object.entries(saved)
-      .filter(([id, text]) => this.available(Number(id)) && typeof text === 'string')
+      .filter(([id, text]) => this.available(Number(id)) && typeof text === 'string' && text.trim())
       .map(([id, text]) => [id, text.slice(0, COLLAGE_NOTE_LIMIT)]));
   },
-  saveNotes() {
-    const notes = Object.fromEntries(Object.entries(this.notes).filter(([, text]) => text.trim()));
-    collageStorage(storage => storage.setItem(this.notesKey(), JSON.stringify(notes)));
+  async loadDraft(snapshot) {
+    const token = ++this.draftToken;
+    this.draftLoaded = false; this.touched = false; this.foreignNotes = {};
+    let draft = null;
+    try {
+      draft = (await jsonRequest(`/api/workspace/${encodeURIComponent(snapshot.sid)}/collage`)).draft;
+    } catch { /* 读取失败时从当前勾选开始，稍后的修改仍会保存 */ }
+    if (token !== this.draftToken || snapshot !== this.snapshot) return;
+    const index = new Map(snapshot.cuts.map((_, i) => [this.frameKey(i), i]));
+    const toIndex = key => index.get(String(key));
+    let applied = false;
+    if (draft && typeof draft === 'object') {
+      // Anything changed while the draft was loading wins over the saved copy.
+      for (const [key, text] of Object.entries(draft.notes || {})) {
+        const i = toIndex(key);
+        if (i === undefined) this.foreignNotes[key] = text;
+        else if (this.notes[i] === undefined) { this.notes[i] = text; applied = true; }
+      }
+      for (const [key, crop] of Object.entries(draft.crops || {})) {
+        const i = toIndex(key);
+        if (i !== undefined && !this.crops[i]) { this.crops[i] = crop; applied = true; }
+      }
+      const ids = (draft.ids || []).map(toIndex).filter(i => i !== undefined && this.available(i));
+      if (!this.touched && ids.length && ids.join() !== this.ids.join()) { this.ids = ids; applied = true; }
+    }
+    let migrated = false;
+    for (const [i, text] of Object.entries(this.legacyNotes())) {
+      if (!this.notes[i]) { this.notes[i] = text; migrated = true; }
+    }
+    this.draftLoaded = true;
+    if (this.touched || migrated) this.scheduleSave(0);
+    if (!applied && !migrated) return;
+    this.page = 0;
+    this.invalidate(); this.renderLists(); this.summary(); this.queuePlan();
+  },
+  scheduleSave(delay = 600) {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => this.saveDraft(), delay);
+  },
+  flushSave() {
+    if (this.saveTimer === null) return;
+    clearTimeout(this.saveTimer);
+    this.saveDraft();
+  },
+  async saveDraft() {
+    this.saveTimer = null;
+    // Never overwrite the saved draft with defaults before it has been read back.
+    if (!this.snapshot || !this.draftLoaded) return;
+    const sid = this.snapshot.sid, legacyKey = this.legacyKey;
+    try {
+      await jsonRequest(`/api/workspace/${encodeURIComponent(sid)}/collage`, {method: 'PUT',
+        headers: {'Content-Type': 'application/json'}, keepalive: true, body: JSON.stringify({draft: this.draftBody()})});
+      if (legacyKey) collageStorage(storage => storage.removeItem(legacyKey));
+    } catch (e) {
+      if (this.snapshot?.sid === sid) this.el('#collageStatus').textContent = '拼图草稿暂未保存到工作区：' + (e.message || '请确认工具仍在运行');
+    }
   },
   setNote(id, text, source) {
     this.notes[id] = String(text).slice(0, COLLAGE_NOTE_LIMIT);
-    this.saveNotes();
+    this.touched = true; this.scheduleSave();
     for (const input of [this.noteInputs.get(id), this.focus === id ? this.el('#collageFocusNote') : null]) {
       if (input && input !== source) input.value = this.notes[id];
     }
@@ -129,9 +198,13 @@ const CollageUI = {
     const first = this.ids.indexOf(a), second = this.ids.indexOf(b);
     if (first < 0 || second < 0 || first === second) return;
     [this.ids[first], this.ids[second]] = [this.ids[second], this.ids[first]];
+    this.touched = true; this.scheduleSave();
     this.invalidate(); this.renderLists(); this.summary(); this.queuePlan();
   },
-  changed() { this.page = 0; this.invalidate(); this.renderLists(); this.summary(); this.queuePlan(); },
+  changed() {
+    this.touched = true; this.scheduleSave();
+    this.page = 0; this.invalidate(); this.renderLists(); this.summary(); this.queuePlan();
+  },
   select(id) {
     this.focus = id;
     for (const [key, input] of this.noteInputs) input.closest?.('.collageOrderRow')?.classList.toggle('focused', key === id);
@@ -314,6 +387,7 @@ const CollageUI = {
   // ------------------------------------------------------------------ cropping (Cropper.js)
   setCrop(id, crop) {
     if (crop) this.crops[id] = crop; else delete this.crops[id];
+    this.touched = true; this.scheduleSave();
     this.focus = id;
     this.invalidate(); this.renderLists(); this.summary(); this.queuePlan();
   },

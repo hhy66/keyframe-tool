@@ -135,6 +135,49 @@ def _check_text(value, limit, message):
     return value.strip()
 
 
+def _check_crop(c):
+    if not isinstance(c, dict) or set(c) != {'x', 'y', 'width', 'height'}:
+        raise ValueError('裁剪参数无效')
+    if any(type(v) not in (int, float) or not math.isfinite(v) for v in c.values()):
+        raise ValueError('裁剪参数无效')
+    if c['x'] < 0 or c['y'] < 0 or c['width'] <= 0 or c['height'] <= 0 \
+            or c['x'] + c['width'] > 1.000001 or c['y'] + c['height'] > 1.000001:
+        raise ValueError('裁剪区域超出原图')
+    return c
+
+
+DRAFT_LIMIT = 2000
+
+
+def _draft_key(value):
+    """Frames are keyed like the skip state: detected frame number, or a legacy file key."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError('拼图草稿无效')
+    key = str(value)
+    if not key or len(key) > 80 or (isinstance(value, int) and value < 0):
+        raise ValueError('拼图草稿无效')
+    return key
+
+
+def clean_draft(draft):
+    """Validated collage draft: photo order, crops and notes keyed by stable frame keys."""
+    if not isinstance(draft, dict):
+        raise ValueError('拼图草稿无效')
+    ids, crops, notes = draft.get('ids', []), draft.get('crops', {}), draft.get('notes', {})
+    if not isinstance(ids, list) or not isinstance(crops, dict) or not isinstance(notes, dict) \
+            or max(len(ids), len(crops), len(notes)) > DRAFT_LIMIT:
+        raise ValueError('拼图草稿无效')
+    keys = [_draft_key(k) for k in ids]
+    if len(set(keys)) != len(keys):
+        raise ValueError('拼图草稿无效')
+    clean_notes = {}
+    for key, text in notes.items():
+        text = _check_text(text, NOTE_LIMIT, f'备注无效（每张最多 {NOTE_LIMIT} 个字）')
+        if text:
+            clean_notes[_draft_key(key)] = text
+    return {'ids': keys, 'crops': {_draft_key(k): _check_crop(c) for k, c in crops.items()}, 'notes': clean_notes}
+
+
 def validate_options(payload, ids):
     """Checks every option that does not depend on the photos themselves; ids are all selected ids."""
     capacity = per_page(payload)
@@ -160,13 +203,7 @@ def validate_options(payload, ids):
     if not isinstance(crops, dict) or any(k not in known for k in crops):
         raise ValueError('裁剪参数无效')
     for c in crops.values():
-        if not isinstance(c, dict) or set(c) != {'x', 'y', 'width', 'height'}:
-            raise ValueError('裁剪参数无效')
-        if any(type(v) not in (int, float) or not math.isfinite(v) for v in c.values()):
-            raise ValueError('裁剪参数无效')
-        if c['x'] < 0 or c['y'] < 0 or c['width'] <= 0 or c['height'] <= 0 \
-                or c['x'] + c['width'] > 1.000001 or c['y'] + c['height'] > 1.000001:
-            raise ValueError('裁剪区域超出原图')
+        _check_crop(c)
     notes = payload.get('notes', {})
     if not isinstance(notes, dict) or any(k not in known for k in notes):
         raise ValueError('备注参数无效')

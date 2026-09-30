@@ -122,15 +122,47 @@ test('settings are remembered, invalid saved values fall back to defaults',()=>{
   assert.equal(a.$('#collagePerPage').value,'16');assert.equal(a.$('#collageLabelPosition').value,'below');assert.equal(a.$('#collageMode').value,'share');
   const p=a.run('CollageUI.payload()');assert.equal(p.per_page,16);assert.equal(p.label_position,'below');
 });
-test('notes are trimmed into the payload, filtered per page and kept per result',()=>{
-  const store={};const a=boot();
-  a.context.window={localStorage:{getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;}}};
-  a.run('CollageUI.open()');
+test('notes are trimmed into the payload, filtered per page and ignored in original mode',async()=>{
+  const a=boot();a.run('CollageUI.open()');await settle();
   a.run("CollageUI.setNote(0,'  航拍  ');CollageUI.setNote(2,'   ')");
   let p=a.run('CollageUI.payload()');assert.equal(JSON.stringify(p.notes),JSON.stringify({0:'航拍'}));
-  assert.equal(JSON.parse(store['keyframe-tool.collage.notes.one.run'])[0],'  航拍  ');
-  a.run('CollageUI.snapshot=null;CollageUI.notes={};CollageUI.open()');assert.equal(a.run('CollageUI.notes[0]'),'  航拍  ');
   a.$('#collageMode').value='original';p=a.run('CollageUI.payload()');assert.equal(JSON.stringify(p.notes),'{}');
+});
+test('the draft is saved to the workspace keyed by the detected frame and restored onto the right photos',async()=>{
+  const saved={draft:{ids:['2','0'],crops:{'0':{x:.25,y:0,width:.5,height:1}},notes:{'2':'远景','99':'已不在结果里'}}};
+  const a=boot(url=>url.endsWith('/collage')?saved:{});
+  a.state.cuts=[{label:'t0',frame_index:10,source_frame:0},{label:'t1',frame_index:40},{label:'t2',frame_index:70,source_frame:2}];
+  a.run('CollageUI.open()');await settle();await settle();
+  assert.equal(a.run('CollageUI.ids.join(",")'),'2,0');
+  assert.equal(a.run('CollageUI.notes[2]'),'远景');assert.equal(a.run('CollageUI.crops[0].x'),.25);
+  a.run("CollageUI.setNote(1,'特写')");await a.run('CollageUI.saveDraft()');
+  const put=a.calls.filter(c=>c.url==='/api/workspace/one/collage'&&c.options.method==='PUT').at(-1);
+  const body=JSON.parse(put.options.body).draft;
+  assert.deepEqual(body.ids,['2','0']);
+  assert.deepEqual(body.notes,{'99':'已不在结果里','2':'远景','40':'特写'});
+  assert.deepEqual(Object.keys(body.crops),['0']);
+});
+test('nothing is saved before the draft is read, and changes made meanwhile win',async()=>{
+  let release;const saved={draft:{ids:['2'],crops:{},notes:{'0':'旧备注'}}};
+  const a=boot((url,options)=>url.endsWith('/collage')&&!options.method?new Promise(r=>release=()=>r(saved)):{});
+  a.run('CollageUI.open()');
+  a.run("CollageUI.toggle(1);CollageUI.setNote(0,'新备注')");
+  await a.run('CollageUI.saveDraft()');
+  assert.equal(a.calls.filter(c=>c.options.method==='PUT').length,0);
+  release();await settle();await settle();
+  assert.equal(a.run('CollageUI.ids.join(",")'),'0,2,1');assert.equal(a.run('CollageUI.notes[0]'),'新备注');
+  await a.run('CollageUI.saveDraft()');
+  assert.equal(a.calls.filter(c=>c.options.method==='PUT').length,1);
+});
+test('notes kept in this browser by the previous version move into the workspace once',async()=>{
+  const store={'keyframe-tool.collage.notes.one.run':JSON.stringify({1:'浏览器里的备注'})};
+  const a=boot();
+  a.context.window={localStorage:{getItem:k=>store[k]??null,setItem:(k,v)=>{store[k]=v;},removeItem:k=>{delete store[k];}}};
+  a.run('CollageUI.open()');await settle();
+  assert.equal(a.run('CollageUI.notes[1]'),'浏览器里的备注');
+  await a.run('CollageUI.saveDraft()');
+  const put=a.calls.find(c=>c.options.method==='PUT');assert.equal(JSON.parse(put.options.body).draft.notes['1'],'浏览器里的备注');
+  assert.equal(store['keyframe-tool.collage.notes.one.run'],undefined);
 });
 test('rounded corners are disabled with no gap and the reason is shown',()=>{
   const a=boot();a.run('CollageUI.open()');
