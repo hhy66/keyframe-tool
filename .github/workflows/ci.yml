@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Python tests
+        run: python -B -m unittest discover -s tests -v
+      - name: Page tests
+        run: node --test "tests/*.test.cjs"
+
+  portable-exe:
+    name: Portable Windows build
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Build
+        run: python build_exe.py
+      - name: Start the built tool and check it answers
+        shell: pwsh
+        run: |
+          $env:PORT = '8799'
+          $tool = Start-Process -FilePath 'dist\KeyframeTool\KeyframeTool.exe' -WorkingDirectory 'dist\KeyframeTool' -PassThru
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
+              Start-Sleep -Seconds 1
+              try { $ready = (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8799/').StatusCode -eq 200 } catch { }
+            }
+            if (-not $ready) { throw 'The built tool did not start within 60 seconds' }
+            foreach ($path in '/vendor/cropper-1.6.2.min.js', '/layout.js', '/review.js', '/api/workspace') {
+              $code = (Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:8799$path").StatusCode
+              if ($code -ne 200) { throw "$path answered $code" }
+            }
+            if (-not (Test-Path 'dist\KeyframeTool\work')) { throw 'work folder was not created next to the exe' }
+            Write-Host 'Built tool started and served the page, scripts and API.'
+          } finally {
+            Stop-Process -Id $tool.Id -Force -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force 'dist\KeyframeTool\work' -ErrorAction SilentlyContinue
+          }
+      - name: Upload the portable tool
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyframeTool-windows
+          path: dist/KeyframeTool
+          retention-days: 14

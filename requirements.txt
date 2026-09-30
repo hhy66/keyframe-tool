@@ -1,0 +1,7 @@
+# Runtime dependencies (setup.bat installs the same set).
+numpy
+opencv-python-headless
+fastapi
+uvicorn
+python-multipart
+-r requirements-collage.txt
