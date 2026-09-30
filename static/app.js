@@ -406,7 +406,7 @@ async function saveManual(action) {
     state.editIndex = null;
     closeLb(); render(j.result,false);
     persistSelection();
-    toast(action === 'add' ? '已补入关键帧，导出时会按时间排序' : '已保存逐帧微调');
+    toast(action === 'add' ? '已补入 1 张关键帧，其他图片未复制' : '已更新 1 张关键帧，其他图片未复制');
   } catch (e) {
     toast(e.message || '保存失败，原有结果已保留',true);
     if (sid === state.sid) startPoll(true);

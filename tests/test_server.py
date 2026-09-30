@@ -15,6 +15,7 @@ from starlette.datastructures import UploadFile
 from starlette.responses import FileResponse
 
 import server
+import storage_manager
 
 
 class ImmediateThread:
@@ -31,6 +32,8 @@ class VideoTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.work_patch = patch.object(server, "WORK", self.root)
         self.work_patch.start()
+        self.storage_patch = patch.object(server, '_storage', storage_manager.Manager(server))
+        self.storage_patch.start()
         server._sessions.clear()
         server._jobs.clear()
 
@@ -38,6 +41,7 @@ class VideoTests(unittest.TestCase):
         server._sessions.clear()
         server._jobs.clear()
         self.work_patch.stop()
+        self.storage_patch.stop()
         self.tmp.cleanup()
 
     def video(self, colors, fps=30, size=(160, 90)):
@@ -295,7 +299,7 @@ class VideoTests(unittest.TestCase):
         self.edit(sid, "move", 13, index=1)
         result = self.analyze(sid, include_ends=True, sensitivity=90)["result"]
         self.assertEqual([c["frame_index"] for c in result["cuts"]], [0, 13, 33, 59])
-        self.assertTrue((self.root / sid / "frames" / old["run"] / "0.jpg").exists())
+        self.assertFalse((self.root / sid / "frames" / old["run"] / "0.jpg").exists())
         for i, cut in enumerate(result["cuts"]):
             image = cv2.imread(str(self.root / sid / "frames" / result["run"] / f"{i}.jpg"))
             self.assertAlmostEqual(float(image[:6, :6].mean()), cut["frame_index"], delta=1)

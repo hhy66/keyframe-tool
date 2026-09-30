@@ -188,3 +188,14 @@ class StorageTests(unittest.TestCase):
             asyncio.run(server.upload(UploadFile(filename='upload.avi',file=io.BytesIO(b'fixture'))))
         self.assertEqual(len(observed),1)
         self.assertFalse(self.m.busy(observed[0]))
+
+    def test_collage_temporary_cleanup_strict_names(self):
+        d=self.root/'demo'/'exports';d.mkdir()
+        token='a'*32
+        for suffix in ('.png','-preview.jpg','.json'):(d/f'collage-{token}{suffix}').write_bytes(b'generated')
+        (d/'collage-family.png').write_bytes(b'keep')
+        inv=self.m.inventory()['sessions'][0]
+        self.assertEqual(inv['temp_bytes'],27)
+        self.assertEqual(inv['unknown_bytes'],4)
+        self.execute(self.plan('temporary'),'permanent')
+        self.assertEqual([p.name for p in d.iterdir()],['collage-family.png'])

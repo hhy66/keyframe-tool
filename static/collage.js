@@ -1,25 +1,26 @@
 /* A collage is a local, independent draft. Source screenshot files are never edited. */
 const CollageUI = {
-  snapshot:null, ids:[], page:0, token:0, busy:false, canvas:null, abort:null, dragId:null,
+  snapshot:null, ids:[], page:0, token:0, busy:false, abort:null, dragId:null, plan:null, output:null, crops:{}, stageView:null, cropMode:false, focus:null,
   el(selector){return document.querySelector(selector);},
   node(tag,text,cls){const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(cls)el.className=cls;return el;},
   open() {
     if(!state.sid||!state.resultRun||!state.cuts.length){toast('请先生成或恢复关键帧结果');return;}
     this.invalidate();
     if(this.snapshot?.sid===state.sid&&this.snapshot?.run===state.resultRun){
-      this.el('#collagePanel').hidden=false;this.renderLists();this.summary();return;
+      this.el('#collagePanel').hidden=false;this.renderLists();this.summary();this.queuePlan();return;
     }
     this.snapshot={sid:state.sid,run:state.resultRun,name:this.el('#mName').textContent||'video',
       cuts:state.cuts.map(c=>({...c})),thumbs:[...state.thumbs],frames:[...state.frames]};
     this.ids=[...state.sel].filter(i=>this.available(i)).sort((a,b)=>a-b);
-    this.page=0;
+    this.page=0;this.crops={};this.focus=null;this.cropMode=false;
+    this.el('#collageMode').value='original';
     this.el('#collageGrid').value='2';this.el('#collageShape').value='source';
-    this.el('#collageFit').value='contain';this.el('#collageWidth').value='2400';
+    this.el('#collageFit').value='contain';this.el('#collageWidth').value='3000';
     this.el('#collageBackground').value='white';this.el('#collageFormat').value='png';
     for(const selector of ['#collageIndex','#collageTime','#collageSplit'])this.el(selector).checked=false;
     this.el('#collageSource').textContent=`${this.snapshot.name} · 本次基于打开面板时的结果制作`;
     this.el('#collagePanel').hidden=false;
-    this.renderLists();this.summary();
+    this.renderLists();this.summary();this.queuePlan();
   },
   close(){this.invalidate();this.el('#collagePanel').hidden=true;},
   available(i){return Number.isInteger(i)&&i>=0&&i<(this.snapshot?.cuts.length||0)&&this.snapshot.cuts[i].available!==false&&!!this.snapshot.frames[i];},
@@ -28,15 +29,20 @@ const CollageUI = {
     const from=this.ids.indexOf(id);if(from<0||!Number.isInteger(position))return;
     this.ids.splice(from,1);this.ids.splice(Math.max(0,Math.min(this.ids.length,position)),0,id);this.changed();
   },
-  changed(){this.page=0;this.invalidate();this.renderLists();this.summary();},
+  changed(){this.page=0;this.invalidate();this.renderLists();this.summary();this.queuePlan();},
+  discardOutput(output=this.output){
+    if(output?.token&&this.snapshot){
+      jsonRequest(`/api/collage/${encodeURIComponent(output.sid||this.snapshot.sid)}/${encodeURIComponent(output.token)}`,{method:'DELETE',keepalive:true}).catch(()=>{});
+    }
+    if(output===this.output)this.output=null;
+  },
   invalidate(){
-    this.token++;
+    this.token++;clearTimeout(this.planTimer);
     if(this.abort)this.abort();
-    if(this.canvas){this.canvas.width=1;this.canvas.height=1;this.canvas=null;}
-    if(this.downloadUrl){URL.revokeObjectURL(this.downloadUrl);this.downloadUrl=null;}
-    this.el('#collagePreview').textContent='选图或设置已更新，请生成预览。';
-    this.el('#collageDownload').disabled=true;
-    this.el('#collageDownload').setAttribute('aria-disabled','true');
+    this.stageView?.destroy();this.plan=null;this.discardOutput();
+    this.el('#collagePreview').textContent='设置已更新。点击“生成成品”查看实际输出。';
+    this.el('#collageDownload').disabled=true;this.el('#collageDownload').setAttribute('aria-disabled','true');
+    this.el('#collageActual').disabled=true;this.el('#collageFitView').disabled=true;
   },
   pages(ids,grid,split){
     if(![2,3].includes(grid))throw new Error('请选择 2×2 或 3×3 布局');
@@ -45,55 +51,76 @@ const CollageUI = {
     if(ids.length>capacity&&!split)throw new Error(`已选 ${ids.length} 张，超过 ${capacity} 格；请减少选图或开启“分成多张拼图”。`);
     const pages=[];for(let i=0;i<ids.length;i+=capacity)pages.push(ids.slice(i,i+capacity));return pages;
   },
-  options(){return {grid:+this.el('#collageGrid').value,shape:this.el('#collageShape').value,sourceRatio:this.snapshot?.sourceRatio,
-    fit:this.el('#collageFit').value,width:+this.el('#collageWidth').value,
-    background:this.el('#collageBackground').value,format:this.el('#collageFormat').value,
-    index:this.el('#collageIndex').checked,time:this.el('#collageTime').checked,split:this.el('#collageSplit').checked};},
-  layout(options){
-    const {grid,width,shape}=options,ratios={source:options.sourceRatio??16/9,landscape:16/9,square:1,portrait:9/16};
-    if(![2,3].includes(grid)||![1500,2400,3000].includes(width)||!Number.isFinite(ratios[shape])||ratios[shape]<=0)throw new Error('拼图尺寸设置无效');
-    const gap=shape==='source'?0:Math.max(8,Math.round(width/150));
-    const cellWidth=Math.floor((width-(grid+1)*gap)/grid);
-    const imageHeight=Math.round(cellWidth/ratios[shape]);
-    const captionHeight=shape!=='source'&&(options.index||options.time)?Math.max(24,Math.round(width/75)):0;
-    const height=grid*(imageHeight+captionHeight)+(grid+1)*gap;
-    if(width*height>20000000)throw new Error('拼图尺寸过大，请降低输出宽度');
-    return {width,height,gap,cellWidth,imageHeight,captionHeight};
+  options(){
+    const original=this.el('#collageMode').value==='original';
+    return {grid:+this.el('#collageGrid').value,mode:this.el('#collageMode').value,
+      shape:original?'source':this.el('#collageShape').value,fit:original?'contain':this.el('#collageFit').value,
+      width:+this.el('#collageWidth').value,background:this.el('#collageBackground').value,
+      format:this.el('#collageFormat').value,index:!original&&this.el('#collageIndex').checked,
+      time:!original&&this.el('#collageTime').checked,split:this.el('#collageSplit').checked,crops:original?{}:this.crops};
   },
-  geometry(sw,sh,w,h,fit){
-    if(![sw,sh,w,h].every(n=>Number.isFinite(n)&&n>0))throw new Error('图片尺寸无效');
-    if(fit==='contain'){
-      const scale=Math.min(w/sw,h/sh),dw=sw*scale,dh=sh*scale;
-      return {sx:0,sy:0,sw,sh,dx:(w-dw)/2,dy:(h-dh)/2,dw,dh};
-    }
-    if(fit!=='cover')throw new Error('画面填充设置无效');
-    const scale=Math.max(w/sw,h/sh),cropW=w/scale,cropH=h/scale;
-    return {sx:(sw-cropW)/2,sy:(sh-cropH)/2,sw:cropW,sh:cropH,dx:0,dy:0,dw:w,dh:h};
+  payload(){
+    const options=this.options(),pages=this.pages(this.ids,options.grid,options.split);
+    this.page=Math.max(0,Math.min(this.page,pages.length-1));
+    const ids=pages[this.page];
+    return {...options,ids,run:this.snapshot.run,page:this.page+1,
+      crops:Object.fromEntries(Object.entries(options.crops).filter(([id])=>ids.includes(Number(id))))};
   },
   summary(){
-    const notice=this.el('#collageSummary');
-    const seamless=this.el('#collageShape').value==='source';
-    for(const selector of ['#collageFit','#collageIndex','#collageTime'])this.el(selector).disabled=seamless;
-    this.el('#collageModeNote').textContent=seamless?'无缝拼接：自动跟随原图比例，零外边距、零间距，不裁剪、不添加标注栏。图片不会互相覆盖，原视频自带字幕保留。':'留白排版：可自定义格子比例、裁剪方式及标注栏。';
-    try {
-      const options=this.options(),layout=this.layout(options),pages=this.pages(this.ids,options.grid,options.split);
+    const original=this.el('#collageMode').value==='original';
+    for(const selector of ['#collageShape','#collageFit','#collageIndex','#collageTime'])this.el(selector).disabled=original;
+    this.el('#collageWidth').disabled=this.el('#collageMode').value!=='custom';
+    const cropAllowed=!original&&this.el('#collageShape').value!=='source'&&this.el('#collageFit').value==='cover';
+    if(!cropAllowed)this.cropMode=false;
+    this.el('#collageCropMode').disabled=!cropAllowed||this.busy;
+    this.el('#collageCropMode').textContent=this.cropMode?'结束裁剪编辑':'编辑单图裁剪';
+    for(const selector of ['#collageZoomIn','#collageZoomOut','#collageResetCrop'])this.el(selector).disabled=!this.cropMode||this.focus===null||this.busy;
+    this.el('#collageModeNote').textContent=original?'原尺寸无缝：不缩放、不裁剪、没有边距或标注栏。每格保留原图像素。':'分享或自定义：原图经高质量缩放，可选择留白或主动裁剪；最终以实际成品为准。';
+    try{
+      const options=this.options(),pages=this.pages(this.ids,options.grid,options.split);
       this.page=Math.max(0,Math.min(this.page,pages.length-1));
       const empty=options.grid*options.grid-pages[this.page].length;
-      notice.className='collageNotice';
-      notice.textContent=`共选 ${this.ids.length} 张，将生成 ${pages.length} 张拼图。当前第 ${this.page+1} 张使用 ${pages[this.page].length} 张图片`+
-        (empty?`，有 ${empty} 个空格，将保留底色，不重复填图。`:'，没有空格。');
+      this.el('#collageSummary').className='collageNotice';
+      this.el('#collageSummary').textContent=`共选 ${this.ids.length} 张，将生成 ${pages.length} 张拼图；当前使用 ${pages[this.page].length} 张。`+(empty?`剩余 ${empty} 个空格，不重复填图。`:'没有空格。');
       this.el('#collagePage').textContent=`第 ${this.page+1} / ${pages.length} 张拼图`;
-      this.el('#collageDimensions').textContent=`整图 ${layout.width} × ${layout.height} 像素；每格画面 ${layout.cellWidth} × ${layout.imageHeight} 像素`+
-        (layout.captionHeight?'，另有标注栏。':'。');
-      if(seamless&&!options.sourceRatio)this.el('#collageDimensions').textContent=`整图宽 ${layout.width} 像素；高度会在读取原图后按原比例确定。`;
       this.el('#collagePrev').disabled=this.page===0||this.busy;
       this.el('#collageNext').disabled=this.page===pages.length-1||this.busy;
-      this.el('#collageRender').disabled=this.busy;
+      this.el('#collageRender').disabled=this.busy||!this.plan||!this.plan.can_render;
     }catch(e){
-      notice.className='collageNotice error';notice.textContent=e.message;
+      this.el('#collageSummary').className='collageNotice error';this.el('#collageSummary').textContent=e.message;
       this.el('#collagePage').textContent='';this.el('#collageDimensions').textContent='';
       this.el('#collagePrev').disabled=this.el('#collageNext').disabled=this.el('#collageRender').disabled=true;
     }
+  },
+  queuePlan(){
+    clearTimeout(this.planTimer);
+    this.planTimer=setTimeout(()=>this.refreshPlan(),120);
+  },
+  async refreshPlan(){
+    if(!this.snapshot)return;
+    let payload;try{payload=this.payload();}catch{this.summary();return;}
+    const token=this.token,snapshot=this.snapshot;
+    this.el('#collageDimensions').textContent='正在读取原图尺寸…';
+    try{
+      const plan=await jsonRequest(`/api/collage/${encodeURIComponent(snapshot.sid)}/plan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      if(token!==this.token)return;
+      this.plan=plan;
+      this.el('#collageDimensions').textContent=`整图 ${plan.width} × ${plan.height} 像素；每格 ${plan.cell_width} × ${plan.image_height} 像素；预计处理内存约 ${Math.ceil(plan.estimated_memory_bytes/1048576)} MB。`+(plan.warning||'');
+      this.el('#collageStatus').textContent=plan.can_render?'可直接拖动画面交换位置，或生成实际成品。':(plan.warning||'尺寸超过处理限制，请改用分享或自定义尺寸');
+      this.summary();
+      if(typeof CollageStage!=='undefined'){
+        if(!this.stageView)this.stageView=new CollageStage(this.el('#collageStage'),(a,b)=>this.swap(a,b),(id,crop)=>this.setCrop(id,crop),id=>{this.focus=id;this.summary();});
+        await this.stageView.show({...plan,background:payload.background},this.cropMode);
+      }
+    }catch(e){if(token===this.token){this.plan=null;this.el('#collageStatus').textContent=e.message||'预览失败';this.summary();}}
+  },
+  swap(a,b){
+    const first=this.ids.indexOf(a),second=this.ids.indexOf(b);if(first<0||second<0||first===second)return;
+    [this.ids[first],this.ids[second]]=[this.ids[second],this.ids[first]];
+    this.invalidate();this.renderLists();this.summary();this.queuePlan();
+  },
+  setCrop(id,crop){
+    this.crops[id]=crop;this.focus=id;this.invalidate();this.summary();this.queuePlan();
   },
   renderLists(){
     const picker=this.el('#collagePicker'),order=this.el('#collageOrder');picker.innerHTML='';order.innerHTML='';
@@ -133,84 +160,50 @@ const CollageUI = {
     try{await Promise.race([image.decode(),interrupted]);return image;}
     finally{clearTimeout(timer);if(this.abort===cancel)this.abort=null;}
   },
+  async assertCurrent(snapshot){
+    const current=await jsonRequest('/api/status/'+encodeURIComponent(snapshot.sid));
+    if(current.result?.run!==snapshot.run)throw new Error('关键帧结果已更新。请关闭拼图面板、刷新结果后重新选择，避免混用旧图。');
+  },
   async generate(){
     if(this.busy||!this.snapshot)return;
-    let options,layout,pages;
-    try{options=this.options();layout=this.layout(options);pages=this.pages(this.ids,options.grid,options.split);}
-    catch(e){this.el('#collageStatus').textContent=e.message;return;}
-    this.invalidate();const token=this.token,page=this.page,indices=[...pages[page]],snapshot=this.snapshot;
-    this.busy=true;this.summary();
-    const canvas=document.createElement('canvas');canvas.width=layout.width;canvas.height=layout.height;
-    canvas.setAttribute('aria-label',`参考拼图第 ${page+1} 张预览`);
-    const context=canvas.getContext('2d');
-    if(!context){this.busy=false;this.el('#collageStatus').textContent='浏览器无法创建拼图画布';this.summary();return;}
-    context.fillStyle=options.background==='dark'?'#202632':'#ffffff';context.fillRect(0,0,canvas.width,canvas.height);
-    context.imageSmoothingEnabled=true;context.imageSmoothingQuality='high';
-    let completed=false,upscaled=0;
+    let payload;try{payload=this.payload();}catch(e){this.el('#collageStatus').textContent=e.message;return;}
+    const token=this.token,snapshot=this.snapshot;
+    this.discardOutput();this.busy=true;this.summary();
+    this.el('#collageDownload').disabled=true;this.el('#collageDownload').setAttribute('aria-disabled','true');
+    this.el('#collageStatus').textContent='正在用原图生成实际成品…';
+    let result,published=false;
     try{
-      for(let position=0;position<indices.length;position++){
-        if(token!==this.token)return;
-        const id=indices[position];
-        this.el('#collageStatus').textContent=`正在读取原图 ${position+1}/${indices.length}…`;
-        let image;
-        try{image=await this.loadImage(snapshot.frames[id]);}
-        catch(e){throw new Error(`原图 #${id+1} 无法读取：${e.message}。未生成不完整拼图，请恢复文件或移除该图片。`);}
-        if(token!==this.token){image.src='';return;}
-        if(options.shape==='source'&&position===0){
-          options.sourceRatio=image.naturalWidth/image.naturalHeight;
-          snapshot.sourceRatio=options.sourceRatio;
-          layout=this.layout(options);
-          canvas.width=layout.width;canvas.height=layout.height;
-          context.fillStyle=options.background==='dark'?'#202632':'#ffffff';context.fillRect(0,0,canvas.width,canvas.height);
-          context.imageSmoothingEnabled=true;context.imageSmoothingQuality='high';
-        }
-        if(options.shape==='source'&&Math.abs(image.naturalWidth/image.naturalHeight-options.sourceRatio)>1e-6){
-          image.src='';throw new Error('所选图片比例不一致，无法同时无缝且完整显示。请选择相同比例的图片，或切换留白排版。');
-        }
-        // Integer tile rectangles share exactly one boundary: no gutters or overlaps.
-        const box=options.shape==='source'?{sx:0,sy:0,sw:image.naturalWidth,sh:image.naturalHeight,dx:0,dy:0,dw:layout.cellWidth,dh:layout.imageHeight}:
-          this.geometry(image.naturalWidth,image.naturalHeight,layout.cellWidth,layout.imageHeight,options.fit);
-        if(box.dw>box.sw+1||box.dh>box.sh+1)upscaled++;
-        const x=layout.gap+(position%options.grid)*(layout.cellWidth+layout.gap);
-        const y=layout.gap+Math.floor(position/options.grid)*(layout.imageHeight+layout.captionHeight+layout.gap);
-        context.drawImage(image,box.sx,box.sy,box.sw,box.sh,x+box.dx,y+box.dy,box.dw,box.dh);
-        image.src='';
-        if(layout.captionHeight){
-          const pieces=[];
-          if(options.index)pieces.push('#'+String(id+1).padStart(3,'0'));
-          if(options.time)pieces.push(snapshot.cuts[id].label||'时间未知');
-          context.fillStyle=options.background==='dark'?'#f2f4f8':'#26354b';
-          context.font=`${Math.round(layout.captionHeight*0.5)}px "Microsoft YaHei", sans-serif`;
-          context.textBaseline='middle';context.fillText(pieces.join('  ·  '),x+4,y+layout.imageHeight+layout.captionHeight/2,layout.cellWidth-8);
-        }
-      }
+      result=await jsonRequest(`/api/collage/${encodeURIComponent(snapshot.sid)}/render`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)},0);
+      result.sid=snapshot.sid;
       if(token!==this.token)return;
-      const mime=options.format==='jpeg'?'image/jpeg':'image/png';
-      this.el('#collageStatus').textContent='正在准备下载图片…';
-      const blob=await new Promise((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('图片编码失败，请降低尺寸后重试')),mime,0.95));
+      const image=await this.loadImage(result.preview_url);
       if(token!==this.token)return;
-      if(blob.type!==mime)throw new Error('浏览器不支持此格式，请选择 PNG');
-      this.downloadUrl=URL.createObjectURL(blob);
-      const name=snapshot.name.replace(/\.[^.]+$/,'').replace(/[\\/:*?"<>|\r\n]/g,'_').slice(0,60)||'video';
-      const link=this.el('#collageDownload');link.href=this.downloadUrl;
-      link.download=`参考拼图_${name}_${options.grid}x${options.grid}_${String(page+1).padStart(2,'0')}.${options.format==='jpeg'?'jpg':'png'}`;
-      const preview=this.el('#collagePreview');preview.innerHTML='';preview.appendChild(canvas);
-      this.canvas=canvas;this.output={page,pages:pages.length,options,name:snapshot.name,token};completed=true;
-      this.el('#collageDownload').disabled=false;
-      this.el('#collageDownload').setAttribute('aria-disabled','false');
-      this.el('#collageStatus').textContent=`第 ${page+1} 张预览已生成，可下载 ${options.format.toUpperCase()}。`+
-        (upscaled?`其中 ${upscaled} 张原图小于目标格子，放大不会增加真实细节。`:'');
-    }catch(e){if(token===this.token)this.el('#collageStatus').textContent=e.message||'拼图生成失败，请重试';}
-    finally{if(!completed){canvas.width=1;canvas.height=1;}this.busy=false;this.summary();}
+      image.alt='实际导出文件的预览';image.className='collageFinalImage';
+      const preview=this.el('#collagePreview');preview.innerHTML='';preview.appendChild(image);
+      this.output={...result,revision:token,page:this.page,pages:this.pages(this.ids,payload.grid,payload.split).length};
+      const link=this.el('#collageDownload');link.href=result.download_url;link.download='';link.disabled=false;link.setAttribute('aria-disabled','false');
+      this.el('#collageActual').disabled=false;this.el('#collageFitView').disabled=false;
+      this.el('#collageStatus').textContent=`成品已生成：${result.width} × ${result.height}，${result.format.toUpperCase()}。预览与下载对应同一个文件。`;
+      published=true;
+    }catch(e){if(token===this.token)this.el('#collageStatus').textContent=e.message||'生成失败，未改变原有截图';}
+    finally{if(result&&!published)this.discardOutput(result);this.busy=false;this.summary();}
   },
-  changePage(delta){
-    if(this.busy)return;this.page+=delta;this.invalidate();this.summary();
+  async finalView(actual){
+    if(!this.output)return;
+    const output=this.output,token=this.token;
+    try{
+      const image=await this.loadImage(actual?output.image_url:output.preview_url);
+      if(token!==this.token)return;
+      image.alt=actual?'成品原尺寸，滚动查看细节':'实际导出文件的预览';image.className=actual?'collageFinalImage actual':'collageFinalImage';
+      const preview=this.el('#collagePreview');preview.innerHTML='';preview.appendChild(image);
+    }catch(e){if(token===this.token)this.el('#collageStatus').textContent=e.message||'读取成品失败';}
   },
+  changePage(delta){if(this.busy)return;this.page+=delta;this.invalidate();this.summary();this.queuePlan();},
   download(event){
-    if(!this.canvas||!this.downloadUrl||!this.output||this.output.token!==this.token){event.preventDefault();return;}
-    const output=this.output;
-    this.el('#collageStatus').textContent=`已交给浏览器下载第 ${output.page+1}/${output.pages} 张拼图，请在下载列表确认保存结果。`;
+    if(!this.output||this.output.revision!==this.token){event.preventDefault();return;}
+    this.el('#collageStatus').textContent=`已交给浏览器下载第 ${this.output.page+1}/${this.output.pages} 张成品，请查看下载列表。`;
   },
+
 };
 document.querySelector('#btnCollage').addEventListener('click',()=>CollageUI.open());
 document.querySelector('#collageClose').addEventListener('click',()=>CollageUI.close());
@@ -222,10 +215,21 @@ document.querySelector('#collageImportSelection').addEventListener('click',()=>{
   if(CollageUI.snapshot?.sid!==state.sid||CollageUI.snapshot?.run!==state.resultRun){toast('结果版本已变化，请关闭后重新打开拼图面板');return;}
   CollageUI.ids=[...state.sel].filter(i=>CollageUI.available(i)).sort((a,b)=>a-b);CollageUI.changed();
 });
-for(const selector of ['#collageGrid','#collageShape','#collageFit','#collageWidth','#collageBackground','#collageFormat','#collageIndex','#collageTime','#collageSplit']){
-  document.querySelector(selector).addEventListener('change',()=>{CollageUI.page=0;CollageUI.invalidate();CollageUI.summary();});
+for(const selector of ['#collageMode','#collageGrid','#collageShape','#collageFit','#collageWidth','#collageBackground','#collageFormat','#collageIndex','#collageTime','#collageSplit']){
+  document.querySelector(selector).addEventListener('change',()=>{
+    if(['#collageMode','#collageShape','#collageFit'].includes(selector)){CollageUI.crops={};CollageUI.focus=null;}
+    if(CollageUI.el('#collageMode').value==='share')CollageUI.el('#collageWidth').value='3000';
+    CollageUI.page=0;CollageUI.invalidate();CollageUI.summary();CollageUI.queuePlan();
+  });
 }
 document.querySelector('#collagePrev').addEventListener('click',()=>CollageUI.changePage(-1));
 document.querySelector('#collageNext').addEventListener('click',()=>CollageUI.changePage(1));
 document.querySelector('#collageRender').addEventListener('click',()=>CollageUI.generate());
 document.querySelector('#collageDownload').addEventListener('click',event=>CollageUI.download(event));
+
+document.querySelector('#collageCropMode').addEventListener('click',()=>{CollageUI.cropMode=!CollageUI.cropMode;CollageUI.summary();CollageUI.refreshPlan();});
+document.querySelector('#collageZoomIn').addEventListener('click',()=>CollageUI.stageView?.zoom(1.15));
+document.querySelector('#collageZoomOut').addEventListener('click',()=>CollageUI.stageView?.zoom(1/1.15));
+document.querySelector('#collageResetCrop').addEventListener('click',()=>{if(CollageUI.focus!==null){delete CollageUI.crops[CollageUI.focus];CollageUI.invalidate();CollageUI.summary();CollageUI.queuePlan();}});
+document.querySelector('#collageActual').addEventListener('click',()=>CollageUI.finalView(true));
+document.querySelector('#collageFitView').addEventListener('click',()=>CollageUI.finalView(false));

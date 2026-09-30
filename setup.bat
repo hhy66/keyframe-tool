@@ -4,7 +4,7 @@ title Video Keyframe Tool - Setup
 
 echo Checking existing environment ...
 if exist ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" -c "import cv2, numpy, fastapi, uvicorn" >nul 2>&1
+    ".venv\Scripts\python.exe" -c "import cv2, numpy, fastapi, uvicorn, PIL; assert PIL.__version__ == '12.3.0'" >nul 2>&1
     if not errorlevel 1 (
         echo Environment already installed. Nothing to do.
         pause
@@ -24,11 +24,11 @@ if not exist ".venv\Scripts\python.exe" (
 )
 echo Installing dependencies (numpy / opencv / fastapi) ...
 echo Using USTC mirror for speed. Takes about 1 minute ...
-".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --timeout 60 -i https://pypi.mirrors.ustc.edu.cn/simple/ numpy opencv-python-headless fastapi uvicorn python-multipart
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --timeout 60 -i https://pypi.mirrors.ustc.edu.cn/simple/ numpy opencv-python-headless fastapi uvicorn python-multipart -r requirements-collage.txt
 if errorlevel 1 (
     echo.
     echo Mirror failed, retrying with the default index ...
-    ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --timeout 60 numpy opencv-python-headless fastapi uvicorn python-multipart
+    ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --timeout 60 numpy opencv-python-headless fastapi uvicorn python-multipart -r requirements-collage.txt
 )
 if errorlevel 1 goto :fail
 echo.

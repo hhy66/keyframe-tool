@@ -64,6 +64,8 @@ def _storage_guard(fn):
     def guarded(*args, **kwargs):
         with _lock:
             _storage.recover()
+            for sid in list(_sessions):
+                _collect_garbage(sid)
             return fn(*args, **kwargs)
     return guarded
 
@@ -74,6 +76,16 @@ def _file_response(sid, path, **kwargs):
 
 class _Cancelled(Exception):
     pass
+
+
+def _collect_garbage(sid):
+    ses = _sessions.get(sid)
+    if not ses or not ses.get('pending_delete') or _storage.active.get(sid,0): return
+    try:
+        workspace_store.collect_retired(WORK,sid,ses)
+        ses['cleanup_warning'] = '旧图被占用，稍后自动清理' if ses.get('pending_delete') else ''
+    except (OSError,ValueError):
+        ses['cleanup_warning'] = '旧图暂未清理，将在下次访问时重试'
 
 
 # ---------------------------------------------------------------- 基础工具
@@ -277,6 +289,7 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
 
         cache = ses["cache"]
         run = job["run"]
+        workspace_store.begin_result(WORK,sid,run)
         fdir = sdir / "frames" / run          # 原分辨率原图
         tdir = sdir / "thumbs" / run          # 页面预览小图
         # 结果完成前不覆盖或删除已发布的图片，旧页面和下载仍可使用。
@@ -307,7 +320,7 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
                 _write_jpeg(tdir / f"{i}.jpg", prev, 85)
                 t = float(cache["times"][frame_index])
                 cuts.append({"kind": kind, "frame_index": frame_index, "time": round(t, 6),
-                             "label": _fmt_time(t)})
+                             "label": _fmt_time(t), "asset_run":run, "file_index":i})
         finally:
             cap.release()
 
@@ -339,13 +352,13 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
         with _lock:
             if job.get("cancel") or _jobs.get(sid) is not job:
                 raise _Cancelled()
-            staged = {**ses, "excluded": list(ses.get("excluded", []))}
+            staged = workspace_store.current_update(ses,result)
             _persist_session(sid, staged, result)
-            ses.update({key: staged[key] for key in ("cache_file", "latest_run", "updated_at", "excluded")})
-            ses.setdefault("results", {})[run] = result
+            ses.update({key: staged[key] for key in ("cache_file", "latest_run", "updated_at", "results", "pending_delete")})
             job["result"] = result
             job["pct"] = 100.0
             job["status"] = "done"
+            _collect_garbage(sid)
     except _Cancelled:
         job["status"] = "cancelled"
         job["stage"] = "已取消"
@@ -358,6 +371,8 @@ def _process_job(sid: str, job: dict, ses: dict) -> None:
             for directory in (fdir, tdir):
                 if directory is not None:
                     shutil.rmtree(directory, ignore_errors=True)
+        try:workspace_store.finish_result(WORK,sid,job['run'])
+        except OSError:pass
 
 
 # ---------------------------------------------------------------- HTTP API
@@ -384,6 +399,7 @@ def _session(sid):
     except (ValueError, OSError) as exc:
         raise HTTPException(422, str(exc)) from exc
     restored["worker_lock"] = threading.Lock()
+    workspace_store.recover_result(WORK,sid,restored)
     result = restored["results"].get(restored.get("latest_run"))
     params = result["params"] if result else dict(workspace_store.DEFAULT_PARAMS)
     with _lock:
@@ -392,6 +408,7 @@ def _session(sid):
             _jobs[sid] = dict(status="done" if result else "idle", pct=100.0 if result else 0.0,
                               stage="已恢复", error=None, result=result, run=result["run"] if result else "",
                               cancel=False, **params)
+        _collect_garbage(sid)
         return _sessions[sid]
 
 
@@ -544,7 +561,8 @@ def edit(sid: str, payload: dict):
         action = payload.get("action")
         if action not in ("add", "move"):
             raise HTTPException(400, "未知编辑操作")
-        cuts = [dict(cut) for cut in result["cuts"]]
+        cuts = [{**cut, 'asset_run':workspace_store.asset_ref(result,i)[0],
+                 'file_index':workspace_store.asset_ref(result,i)[1]} for i,cut in enumerate(result["cuts"])]
         source = None
         old_cut = None
         if action == "move":
@@ -571,6 +589,10 @@ def edit(sid: str, payload: dict):
                      "label": _fmt_time(timestamp)})
         cuts.sort(key=lambda cut: cut["frame_index"])
         run = uuid.uuid4().hex[:8]
+        for cut in cuts:
+            if cut['frame_index'] == target:
+                cut.update(asset_run=run,file_index=0)
+        workspace_store.begin_result(WORK,sid,run)
         fdir, tdir = (WORK / sid / name / run for name in ("frames", "thumbs"))
         for directory in (fdir, tdir):
             directory.mkdir(parents=True)
@@ -585,29 +607,22 @@ def edit(sid: str, payload: dict):
         hh, ww = image.shape[:2]
         scale = min(1.0, 720 / max(hh, ww))
         thumbnail = cv2.resize(image, (max(1, int(ww * scale)), max(1, int(hh * scale))))
-        previous = {cut["frame_index"]: i for i, cut in enumerate(result["cuts"])}
-        for i, cut in enumerate(cuts):
-            if cut["frame_index"] == target:
-                _write_jpeg(fdir / f"{i}.jpg", image, 95)
-                _write_jpeg(tdir / f"{i}.jpg", thumbnail, 85)
-            else:
-                old_index = previous[cut["frame_index"]]
-                for name, directory in (("frames", fdir), ("thumbs", tdir)):
-                    shutil.copyfile(WORK / sid / name / result["run"] / f"{old_index}.jpg",
-                                    directory / f"{i}.jpg")
+        _write_jpeg(fdir / '0.jpg', image, 95)
+        _write_jpeg(tdir / '0.jpg', thumbnail, 85)
         updated = {**result, "run": run, "cuts": cuts, "created_at": storage_manager.now(), "action": "manual", "pinned": False,
                    "thumbs": [f"/api/thumb/{sid}/{run}/{i}" for i in range(len(cuts))],
                    "frames": [f"/api/frame/{sid}/{run}/{i}" for i in range(len(cuts))]}
+        workspace_store.result_urls(sid,updated)
         with _lock:
             if _jobs.get(sid) is not job or job.get("result") is not result or job["status"] == "running":
                 raise HTTPException(409, "分析任务或结果已更新，请重试编辑")
             excluded = [target if value == source else value for value in ses.get("excluded", [])]
-            staged = {**ses, "manual_additions": additions, "manual_adjustments": adjustments, "excluded": excluded}
+            staged = {**workspace_store.current_update(ses,updated), "manual_additions": additions, "manual_adjustments": adjustments, "excluded": excluded}
             _persist_session(sid, staged, updated)
-            ses.update({key:staged[key] for key in ("manual_additions", "manual_adjustments", "excluded", "cache_file", "latest_run", "updated_at")})
-            ses.setdefault("results", {})[run] = updated
+            ses.update({key:staged[key] for key in ("manual_additions", "manual_adjustments", "excluded", "cache_file", "latest_run", "updated_at", "results", "pending_delete")})
             job.update(result=updated, run=run, status="done", pct=100.0, stage="完成", error=None)
             published = True
+            _collect_garbage(sid)
         return {"result": updated, "from_frame": source, "to_frame": target}
     except HTTPException:
         raise
@@ -617,6 +632,9 @@ def edit(sid: str, payload: dict):
         if not published:
             for directory in directories:
                 shutil.rmtree(directory, ignore_errors=True)
+        if directories:
+            try:workspace_store.finish_result(WORK,sid,run)
+            except OSError:pass
         ses["worker_lock"].release()
 
 
@@ -732,7 +750,7 @@ def status(sid: str):
         "params": {key: job[key] for key in ("sensitivity", "include_ends", "min_scene_seconds", "suppress_flash")},
         "max_export": MAX_EXPORT,
         "excluded": ses.get("excluded", []),
-        "workspace_note": ses.get("workspace_note", ""),
+        "workspace_note": ses.get("workspace_note", "") + ses.get("cleanup_warning", ""),
         "status": job["status"],
         "pct": round(job["pct"], 1),
         "stage": job["stage"],
@@ -767,13 +785,15 @@ def frame_dl(sid: str, run: str, i: int):
     path = _safe_path(sid, "frames", run, f"{i}.jpg")
     if not path.exists():
         raise HTTPException(404, "原图不存在")
-    result = _session(sid).get("results", {}).get(run)
+    results = _session(sid).get("results", {})
     name = "frame.jpg"
-    if result:
-        c = next((c for n, c in enumerate(result["cuts"]) if c.get("file_index", n) == i), None)
-        if c:
+    for result in results.values():
+        match = next(((n,c) for n,c in enumerate(result['cuts']) if workspace_store.asset_ref(result,n)==(run,i)),None)
+        if match:
+            number,c = match
             label = "unknown" if c["frame_index"] is None else c["label"].replace(":", "-")
-            name = f"{i + 1:03d}_{label}.jpg"
+            name = f"{number + 1:03d}_{label}.jpg"
+            break
     return _file_response(sid, path, media_type="image/jpeg",
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
@@ -783,7 +803,7 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
     job = _jobs.get(sid)
     result = ses.get("results", {}).get(run) if run else (job or {}).get("result")
     if not result:
-        raise HTTPException(400, "还没有可导出的结果，请先完成分析")
+        raise HTTPException(409 if run else 400, "结果已更新，请刷新后重新选择" if run else "还没有可导出的结果，请先完成分析")
     cuts = result["cuts"]
     if not cuts:
         raise HTTPException(400, "没有检测到任何关键帧")
@@ -799,7 +819,7 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
     if len(wanted) > MAX_EXPORT:
         raise HTTPException(400, f"一次最多导出 {MAX_EXPORT} 张，请先减少选择")
     fdir = _safe_path(sid, "frames", result["run"])
-    paths = {i: _safe_path(sid, "frames", result["run"], f"{cuts[i].get('file_index', i)}.jpg") for i in wanted}
+    paths = {i: workspace_store.asset_path(WORK,sid,result,i) for i in wanted}
     if any(not paths[i].is_file() for i in wanted):
         raise HTTPException(409, "选中的原图文件缺失，请重新分析；未导出不完整的结果")
     export_dir = _safe_path(sid, "exports")
@@ -865,6 +885,128 @@ def re_safe(name: str) -> str:
 def re_sub(name: str) -> str:
     import re
     return re.sub(r'[\\/:*?"<>|\r\n\t]', "_", name)[:80]
+
+
+# ---------------------------------------------------------------- Pillow reference collages
+
+def _collage_sources(sid, payload):
+    ses = _session(sid)
+    result = ses.get('results', {}).get(ses.get('latest_run'))
+    if not result or payload.get('run') != result['run']:
+        raise HTTPException(409, '结果已更新，请刷新后重新制作拼图')
+    ids = payload.get('ids')
+    if not isinstance(ids, list) or not 1 <= len(ids) <= 9 or any(type(i) is not int or not 0 <= i < len(result['cuts']) for i in ids) or len(set(ids)) != len(ids):
+        raise HTTPException(400, '请选择1至9张不重复的有效关键帧')
+    sources = []
+    for i in ids:
+        try:
+            path = workspace_store.asset_path(WORK, sid, result, i)
+            run, number = workspace_store.asset_ref(result, i)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not path.is_file(): raise HTTPException(409, '选中的原图文件缺失，请恢复工作区或重新分析')
+        src=f'/api/frame/{sid}/{run}/{number}'
+        thumb=workspace_store.asset_path(WORK,sid,result,i,'thumbs')
+        sources.append(dict(id=i, path=path, label=result['cuts'][i].get('label','未知'),
+                            src=src, thumb=f'/api/thumb/{sid}/{run}/{number}' if thumb.is_file() else src))
+    return sources
+
+
+def _collage_plan(payload, sources):
+    import collage_engine
+    from PIL.Image import DecompressionBombError
+    try: return collage_engine.plan(payload, sources)
+    except (ValueError, OSError, DecompressionBombError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def _expire_collages(sid, keep=3):
+    import collage_engine, time
+    if _storage.active.get(sid, 0): return
+    directory = _safe_path(sid, 'exports')
+    if not directory.is_dir(): return
+    groups = {}
+    for path in directory.iterdir():
+        if collage_engine.managed_file(path.name):
+            path = _safe_path(sid, 'exports', path.name)
+            token = path.name[8:40]
+            groups.setdefault(token, []).append(path)
+    ordered = sorted(groups.values(), key=lambda paths:max(p.stat().st_mtime for p in paths), reverse=True)
+    for n, paths in enumerate(ordered):
+        if any(_storage.prepared.get((sid,p.name),0)>time.monotonic() for p in paths):continue
+        if n >= keep or time.time()-max(p.stat().st_mtime for p in paths)>3600:
+            for p in paths:
+                try:p.unlink(missing_ok=True)
+                except OSError:pass
+
+
+@app.post('/api/collage/{sid}/plan')
+@_storage_guard
+def plan_collage(sid: str, payload: dict):
+    _expire_collages(sid)
+    return _collage_plan(payload, _collage_sources(sid,payload))
+
+
+@app.post('/api/collage/{sid}/render')
+@_storage_guard
+def render_collage(sid: str, payload: dict):
+    import collage_engine, time
+    sources = _collage_sources(sid,payload)
+    plan = _collage_plan(payload,sources)
+    if not plan['can_render']:raise HTTPException(400,plan['warning'])
+    # The existing storage RLock serializes renders and protects all source files.
+    _expire_collages(sid,keep=2)
+    if sum(1 for (record,name),expiry in _storage.prepared.items() if record == sid and name.startswith('collage-') and expiry > time.monotonic()) >= 8:
+        raise HTTPException(429, '待查看拼图过多，请关闭旧成品或稍后再生成')
+    token=uuid.uuid4().hex
+    fmt=payload.get('format','png');ext='png' if fmt=='png' else 'jpg'
+    directory=_safe_path(sid,'exports');directory.mkdir(exist_ok=True)
+    name=f'collage-{token}'
+    path=directory/f'{name}.{ext}';preview=directory/f'{name}-preview.jpg';metadata=directory/f'{name}.json'
+    try:
+        collage_engine.render(plan,sources,payload,path,preview)
+        video_name=re_safe(Path(_session(sid).get('video_name','video')).stem or 'video')
+        filename=f"参考拼图_{video_name}_{payload.get('grid',3)}x{payload.get('grid',3)}_{payload.get('page',1):02d}.{ext}"
+        workspace_store.atomic_json(metadata,dict(token=token,format=fmt,filename=filename,run=payload['run'],created_at=time.time(),width=plan['width'],height=plan['height']))
+    except Exception as exc:
+        for p in (path,preview,metadata):p.unlink(missing_ok=True)
+        raise HTTPException(400,'拼图生成失败：'+str(exc)) from exc
+    _storage.prepared[(sid,metadata.name)]=time.monotonic()+60
+    base=f'/api/collage/{sid}/{token}'
+    return dict(token=token,width=plan['width'],height=plan['height'],format=fmt,bytes=path.stat().st_size,
+                preview_url=base+'/preview',image_url=base+'/image',download_url=base+'/download',plan=plan)
+
+
+@app.get('/api/collage/{sid}/{token}/{view}')
+@_storage_guard
+def collage_file(sid: str, token: str, view: str):
+    import collage_engine, json
+    _session(sid)
+    if not collage_engine.TOKEN.fullmatch(token) or view not in ('preview','image','download'):raise HTTPException(404,'拼图不存在')
+    metadata=_safe_path(sid,'exports',f'collage-{token}.json')
+    try:info=json.loads(metadata.read_text(encoding='utf-8'))
+    except (OSError,ValueError):raise HTTPException(404,'拼图已清理，请重新生成')
+    if info.get('format') not in ('png','jpeg'):raise HTTPException(404,'拼图记录无效')
+    ext='png' if info['format']=='png' else 'jpg'
+    path=_safe_path(sid,'exports',f'collage-{token}-preview.jpg' if view=='preview' else f'collage-{token}.{ext}')
+    if not path.is_file():raise HTTPException(404,'拼图已清理，请重新生成')
+    kwargs={'media_type':'image/jpeg' if view=='preview' or ext=='jpg' else 'image/png'}
+    if view=='download':kwargs['filename']=re_safe(info.get('filename',f'参考拼图_{token[:8]}.{ext}'))
+    return _file_response(sid,path,**kwargs)
+
+
+@app.delete('/api/collage/{sid}/{token}')
+@_storage_guard
+def delete_collage(sid: str, token: str):
+    import collage_engine
+    _session(sid)
+    if not collage_engine.TOKEN.fullmatch(token):raise HTTPException(400,'拼图标识无效')
+    if _storage.active.get(sid,0):raise HTTPException(409,'文件正在发送，请稍后清理')
+    for suffix in ('.png','.jpg','-preview.jpg','.json'):
+        path=_safe_path(sid,'exports',f'collage-{token}{suffix}')
+        path.unlink(missing_ok=True)
+        _storage.prepared.pop((sid,path.name),None)
+    return {'status':'done'}
 
 
 # ---------------------------------------------------------------- 静态页面

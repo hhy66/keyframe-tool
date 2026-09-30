@@ -11,6 +11,88 @@ import numpy as np
 DEFAULT_PARAMS = dict(sensitivity=50, include_ends=False, min_scene_seconds=0.1, suppress_flash=True)
 
 
+def asset_ref(result, index):
+    cut = result['cuts'][index]
+    run, number = cut.get('asset_run', result['run']), cut.get('file_index', index)
+    if not isinstance(run, str) or isinstance(number, bool) or not isinstance(number, int) or number < 0:
+        raise ValueError('图片引用无效')
+    return run, number
+
+
+def asset_path(root, sid, result, index, kind='frames'):
+    run, number = asset_ref(result, index)
+    return safe_path(root, sid, kind, run, f'{number}.jpg')
+
+
+def result_urls(sid, result):
+    refs = [asset_ref(result, i) for i in range(len(result['cuts']))]
+    result['frames'] = [f'/api/frame/{sid}/{run}/{i}' for run, i in refs]
+    result['thumbs'] = [f'/api/thumb/{sid}/{run}/{i}' for run, i in refs]
+    return result
+
+
+def current_update(ses, result):
+    """Replace only the previous current revision; pre-existing historical records remain explicit."""
+    previous = ses.get('results', {}).get(ses.get('latest_run'))
+    results = dict(ses.get('results', {}))
+    if previous: results.pop(previous['run'], None)
+    results[result['run']] = result
+    live = {asset_ref(r, i) for r in results.values() for i in range(len(r['cuts']))}
+    retired = {tuple(ref) for ref in ses.get('pending_delete', [])}
+    if previous:
+        retired.update(asset_ref(previous, i) for i in range(len(previous['cuts'])))
+    return {**ses, 'results': results, 'pending_delete': sorted(retired-live)}
+
+
+def begin_result(root, sid, run):
+    safe_path(root, sid, 'frames', run)
+    directory = safe_path(root, sid); directory.mkdir(parents=True, exist_ok=True)
+    atomic_json(directory/'pending-result.json', {'run':run})
+
+
+def finish_result(root, sid, run):
+    path = safe_path(root, sid, 'pending-result.json')
+    if path.exists() and json.loads(path.read_text(encoding='utf-8')).get('run') == run:
+        path.unlink()
+
+
+def recover_result(root, sid, ses):
+    path = safe_path(root, sid, 'pending-result.json')
+    if not path.exists(): return
+    run = json.loads(path.read_text(encoding='utf-8'))['run']
+    live = {asset_ref(r, i) for r in ses.get('results', {}).values() for i in range(len(r['cuts']))}
+    for kind in ('frames','thumbs'):
+        folder = safe_path(root, sid, kind, run)
+        if not folder.is_dir(): continue
+        for image in folder.glob('*.jpg'):
+            if image.stem.isdigit() and (run,int(image.stem)) not in live:
+                safe_path(root,sid,kind,run,image.name).unlink()
+        try:folder.rmdir()
+        except OSError:pass
+    path.unlink()
+
+
+def collect_retired(root, sid, ses):
+    pending = ses.get('pending_delete', [])
+    if not pending: return
+    live = {asset_ref(r, i) for r in ses.get('results', {}).values() for i in range(len(r['cuts']))}
+    remaining=[]
+    for run, number in pending:
+        if (run,number) in live: continue
+        failed=False
+        for kind in ('frames','thumbs'):
+            image=asset_path(root,sid,{'run':run,'cuts':[{'file_index':number}]},0,kind)
+            try:image.unlink(missing_ok=True)
+            except OSError:failed=True
+            try:image.parent.rmdir()
+            except OSError:pass
+        if failed:remaining.append([run,number])
+    manifest=safe_path(root,sid,'manifest.json')
+    data=json.loads(manifest.read_text(encoding='utf-8'));data['pending_delete']=remaining
+    atomic_json(manifest,data)
+    ses['pending_delete']=remaining
+
+
 def safe_path(root, *parts):
     root = Path(root)
     if root.is_symlink() or getattr(root, 'is_junction', lambda: False)():
@@ -71,6 +153,7 @@ def save(root, sid, ses, result=None):
                     latest_run=latest, results=results, cache_file=cache_name,
                     manual_additions=sorted(ses.get('manual_additions', set())),
                     manual_adjustments={str(k):v for k,v in ses.get('manual_adjustments', {}).items()},
+                    pending_delete=ses.get('pending_delete', []),
                     excluded=list(ses.get('excluded', [])))
     atomic_json(safe_path(root, sid, 'manifest.json'), manifest)
     ses['cache_file'] = cache_name
@@ -94,14 +177,13 @@ def load(root, sid, load_cache=True):
             if result['run'] != run or not isinstance(result['cuts'], list): raise ValueError('结果索引损坏')
             frames, thumbs = [], []
             for i, cut in enumerate(result['cuts']):
-                number = cut.get('file_index', i)
-                if isinstance(number, bool) or not isinstance(number, int) or number < 0: raise ValueError('图片编号无效')
-                f = safe_path(root, sid, 'frames', run, f'{number}.jpg')
-                t = safe_path(root, sid, 'thumbs', run, f'{number}.jpg')
+                asset_run, number = asset_ref(result,i)
+                f = asset_path(root,sid,result,i)
+                t = asset_path(root,sid,result,i,'thumbs')
                 cut['available'] = f.is_file()
                 if not cut['available']: missing += 1
-                frames.append(f'/api/frame/{sid}/{run}/{number}')
-                thumbs.append(f'/api/thumb/{sid}/{run}/{number}' if t.is_file() else frames[-1])
+                frames.append(f'/api/frame/{sid}/{asset_run}/{number}')
+                thumbs.append(f'/api/thumb/{sid}/{asset_run}/{number}' if t.is_file() else frames[-1])
             result['frames'], result['thumbs'] = frames, thumbs
         latest = data.get('latest_run')
         if latest is not None and latest not in results: raise ValueError('最新结果索引损坏')
@@ -128,6 +210,7 @@ def load(root, sid, load_cache=True):
                    manual_additions=set(data.get('manual_additions', [])),
                    manual_adjustments={int(k):v for k,v in data.get('manual_adjustments', {}).items()},
                    excluded=data.get('excluded', []), updated_at=data.get('updated_at'), legacy=False,
+                   pending_delete=data.get('pending_delete', []),
                    workspace_note=f'{missing} 张原图缺失，不能导出缺失图片' if missing else '')
         if video is None:
             ses['workspace_note'] += ' 原视频缺失，仅可查看和导出已有截图'

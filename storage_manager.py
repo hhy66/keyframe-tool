@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import HTTPException
 from starlette.responses import FileResponse
 import workspace_store as store
+from collage_engine import managed_file
 
 MANAGEMENT = '.storage'
 def now(): return datetime.now(timezone.utc).isoformat()
@@ -74,6 +75,7 @@ class Manager:
                 if not released:
                     self.active[sid] = max(0,self.active.get(sid,0)-1)
                     released = True
+                    self.s._collect_garbage(sid)
         response.__class__ = LeasedResponse
         response._release_lease = release
         return response
@@ -135,16 +137,16 @@ class Manager:
         ses = store.load(self.root,sid,load_cache=False)
         versions=[]; known=set()
         for run,res in ses['results'].items():
-            paths=[store.safe_path(d,'frames',run),store.safe_path(d,'thumbs',run)]
+            paths=list({store.asset_path(self.root,sid,res,i,kind) for i in range(len(res['cuts'])) for kind in ('frames','thumbs')})
             files=[f for p in paths for f in tree(p)]
             known.update(p for p,_,_ in files)
-            versions.append(dict(run=run,bytes=sum(n for _,n,_ in files),count=sum(1 for name,_,_ in tree(paths[0]) if Path(name).suffix.lower()=='.jpg'),
+            versions.append(dict(run=run,bytes=sum(n for _,n,_ in files),count=len({store.asset_ref(res,i) for i in range(len(res['cuts'])) if store.asset_path(self.root,sid,res,i).is_file()}),
                 current=run==ses.get('latest_run'),pinned=bool(res.get('pinned')),manual=res.get('action')=='manual' or any(c.get('kind') in ('manual','adjusted') for c in res['cuts']),
                 created_at=res.get('created_at') or datetime.fromtimestamp(max((p.stat().st_mtime for p in paths if p.exists()),default=d.stat().st_mtime),timezone.utc).isoformat(),
                 thumbnail_url=(res.get('thumbs') or [''])[0]))
         video=ses.get('video_path'); cache=ses.get('cache_file')
         vp=tree(video) if video else []; cp=tree(store.safe_path(d,cache)) if cache else []
-        tmp=[x for x in tree(store.safe_path(d,'exports')) if Path(x[0]).suffix=='.zip']
+        tmp=[x for x in tree(store.safe_path(d,'exports')) if (Path(x[0]).suffix=='.zip' or managed_file(Path(x[0]).name))]
         known.update(p for p,_,_ in vp+cp+tmp)
         known.add(str(d/'manifest.json'))
         unknown=sum(n for p,n,_ in tree(d) if p not in known)
@@ -168,7 +170,7 @@ class Manager:
                     trash.append(dict(id=td.name,name=td.name,bytes=0,created_at='',kind='unknown',session_id='',restorable=False,status='damaged',note='回收记录损坏，保留文件，需人工检查'))
         return dict(path=str(self.root),total_bytes=size(self.root),trash_bytes=sum(x['bytes'] for x in trash),free_bytes=shutil.disk_usage(self.root).free,sessions=sessions,trash=trash)
     def manifest(self,ses):
-        return dict(schema=1,video_file=Path(ses['video_path']).name if ses.get('video_path') else None,video_name=ses['video_name'],meta=ses['meta'],updated_at=now(),latest_run=ses.get('latest_run'),results=ses['results'],cache_file=ses.get('cache_file'),manual_additions=sorted(ses.get('manual_additions',[])),manual_adjustments={str(k):v for k,v in ses.get('manual_adjustments',{}).items()},excluded=ses.get('excluded',[]))
+        return dict(schema=1,video_file=Path(ses['video_path']).name if ses.get('video_path') else None,video_name=ses['video_name'],meta=ses['meta'],updated_at=now(),latest_run=ses.get('latest_run'),results=ses['results'],cache_file=ses.get('cache_file'),manual_additions=sorted(ses.get('manual_additions',[])),manual_adjustments={str(k):v for k,v in ses.get('manual_adjustments',{}).items()},excluded=ses.get('excluded',[]),pending_delete=ses.get('pending_delete',[]))
     def preview(self,payload):
         self.recover(); kind=payload.get('kind'); token=uuid.uuid4().hex
         if kind=='purge':
@@ -188,8 +190,18 @@ class Manager:
                     res=ses['results'].get(run)
                     if not res: fail('版本不存在')
                     if run==ses.get('latest_run') or res.get('pinned'): fail('当前或标记保留的版本不能清理')
-                    paths.extend([f'frames/{run}',f'thumbs/{run}'])
-            elif kind=='temporary': paths=[str(Path(p).relative_to(d)).replace('\\','/') for p,_,_ in tree(store.safe_path(d,'exports')) if Path(p).suffix=='.zip']
+                    shared={store.asset_ref(other,i) for key,other in ses['results'].items() if key not in runs for i in range(len(other['cuts']))}
+                    # Old independent versions retain the directory cleanup behaviour;
+                    # referenced assets are removed individually and never delete a shared current file.
+                    if not any('asset_run' in cut for cut in res['cuts']) and not any(ref[0]==run for ref in shared):
+                        paths.extend([f'frames/{run}',f'thumbs/{run}'])
+                    else:
+                        for i in range(len(res['cuts'])):
+                            asset_run,number=store.asset_ref(res,i)
+                            if (asset_run,number) not in shared:
+                                paths.extend([f'frames/{asset_run}/{number}.jpg',f'thumbs/{asset_run}/{number}.jpg'])
+                paths=list(dict.fromkeys(paths))
+            elif kind=='temporary': paths=[str(Path(p).relative_to(d)).replace('\\','/') for p,_,_ in tree(store.safe_path(d,'exports')) if (Path(p).suffix=='.zip' or managed_file(Path(p).name))]
             elif kind=='video': paths=[Path(ses['video_path']).name] if ses.get('video_path') else []
             elif kind=='cache': paths=[ses['cache_file']] if ses.get('cache_file') else []
             elif kind=='session': paths=['.']
@@ -199,9 +211,9 @@ class Manager:
             items=[]; files=[]
             for rel in paths:
                 rows=tree(d if rel=='.' else store.safe_path(d,*rel.split('/'))); files.extend(rows)
-                label = ('历史版本 '+rel.split('/')[-1]+' 的原分辨率截图') if rel.startswith('frames/') else ('历史版本 '+rel.split('/')[-1]+' 的预览图') if rel.startswith('thumbs/') else '临时下载压缩包 '+Path(rel).name if rel.startswith('exports/') else {'session':'整条工作记录（含全部版本及未知文件）','video':'工作区中的视频副本','cache':'扫描缓存'}.get(kind,rel)
+                label = ('历史版本 '+rel.split('/')[-1]+' 的原分辨率截图') if rel.startswith('frames/') else ('历史版本 '+rel.split('/')[-1]+' 的预览图') if rel.startswith('thumbs/') else '临时导出文件 '+Path(rel).name if rel.startswith('exports/') else {'session':'整条工作记录（含全部版本及未知文件）','video':'工作区中的视频副本','cache':'扫描缓存'}.get(kind,rel)
                 items.append(dict(label=label,bytes=sum(n for _,n,_ in rows),count=len(rows)))
-            consequences={'versions':['所选历史版本从工作区移除，当前结果保留。移入回收区可尝试恢复；永久删除后不能恢复。'],'temporary':['临时ZIP可重新打包，不影响其他目录的下载文件。'],'video':['不能继续分析、补帧或微调；已有截图仍可下载。原始视频不受影响。'],'cache':['后续分析和逐帧编辑需要重新扫描；已有截图保留。'],'session':['整条工作记录及全部版本将移除。',f'包括未知文件 {info["unknown_bytes"]} 字节。']}[kind]
+            consequences={'versions':['所选历史版本从工作区移除，当前结果保留。移入回收区可尝试恢复；永久删除后不能恢复。'],'temporary':['临时ZIP与拼图成品可重新生成，不影响其他目录的下载文件。'],'video':['不能继续分析、补帧或微调；已有截图仍可下载。原始视频不受影响。'],'cache':['后续分析和逐帧编辑需要重新扫描；已有截图保留。'],'session':['整条工作记录及全部版本将移除。',f'包括未知文件 {info["unknown_bytes"]} 字节。']}[kind]
             retained=['工作区外原始视频、已下载文件均保留。'] + ([] if kind=='session' else ['未选择的文件和当前截图保留。'])
             phrase='删除整条记录' if kind=='session' else ''
             plan=dict(session_id=sid,kind=kind,runs=payload.get('runs',[]),paths=paths,snapshot=fingerprint(d))
