@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import shutil
@@ -24,6 +25,7 @@ import zipfile
 from pathlib import Path
 
 import cv2
+import frame_analysis
 import numpy as np
 import uvicorn
 import workspace_store
@@ -806,6 +808,130 @@ def similar(sid: str, run: str):
             _similar_cache.clear()
         _similar_cache[key] = {"run": run, "scores": scores, "threshold": SIMILAR_THRESHOLD}
     return _similar_cache[key]
+
+
+# ---------------------------------------------------------------- 画面分析
+# 按钮触发，后台逐张计算；结果按图片文件记在工作目录的 analysis.json，微调过的图只重算那一张。
+ANALYSIS_FILE = "analysis.json"
+_analysis_items: dict[str, dict] = {}  # session_id -> {"run/编号": 分析结果}
+_analysis_jobs: dict[str, dict] = {}  # session_id -> {run, status, done, total, failed, error}
+_analysis_write = threading.Lock()
+
+
+def _asset_key(result, i):
+    run, number = workspace_store.asset_ref(result, i)
+    return f"{run}/{number}"
+
+
+def _analysis_cache(sid):
+    """已算好的分析结果；算法版本不同的旧缓存直接作废。"""
+    if sid not in _analysis_items:
+        items = {}
+        try:
+            data = json.loads(workspace_store.safe_path(WORK, sid, ANALYSIS_FILE).read_text(encoding="utf-8"))
+            if data.get("version") == frame_analysis.ANALYSIS_VERSION and isinstance(data.get("items"), dict):
+                items = data["items"]
+        except (OSError, ValueError, AttributeError):
+            pass
+        _analysis_items[sid] = items
+    return _analysis_items[sid]
+
+
+def _save_analysis(sid, items):
+    """只保留仍被某个结果引用的图片，删掉的历史版本不会一直留在缓存里。"""
+    with _lock:
+        ses = _sessions.get(sid)
+        if ses is None:
+            return
+        live = {_asset_key(res, i) for res in ses.get("results", {}).values() for i in range(len(res["cuts"]))}
+    kept = {key: value for key, value in list(items.items()) if key in live}
+    with _analysis_write:
+        workspace_store.atomic_json(
+            workspace_store.safe_path(WORK, sid, ANALYSIS_FILE),
+            {"version": frame_analysis.ANALYSIS_VERSION, "items": kept},
+        )
+
+
+def _run_analysis(sid, job, todo, items):
+    status, error = "done", ""
+    try:
+        for n, (key, path) in enumerate(todo, 1):
+            try:
+                # np.fromfile + imdecode 支持 Windows 中文路径
+                image = cv2.imdecode(np.fromfile(str(path), np.uint8), cv2.IMREAD_COLOR)
+                items[key] = frame_analysis.analyze(image)
+            except (OSError, ValueError, cv2.error):
+                job["failed"] += 1
+            job["done"] = n
+            if n % 25 == 0:
+                _save_analysis(sid, items)
+        _save_analysis(sid, items)
+    except Exception as exc:  # 保存失败等：告诉页面，已算好的仍在内存里可用
+        status, error = "error", str(exc) or "画面分析失败"
+    finally:
+        with _lock:
+            _storage.active[sid] = max(0, _storage.active.get(sid, 0) - 1)
+            _collect_garbage(sid)
+            job.update(status=status, error=error)
+
+
+def _analysis_state(sid, run, items=True):
+    result = _session(sid).get("results", {}).get(run)
+    if not result:
+        raise HTTPException(404, "结果已更新，请刷新")
+    cache = _analysis_cache(sid)
+    found = [cache.get(_asset_key(result, i)) for i in range(len(result["cuts"]))]
+    ready = sum(item is not None for item in found)
+    job = _analysis_jobs.get(sid)
+    running = bool(job and job["status"] == "running")
+    state = {
+        "run": run,
+        "version": frame_analysis.ANALYSIS_VERSION,
+        "status": "running" if running else "done" if ready == len(found) else "idle",
+        "ready": ready,
+        "total": len(found),
+        "job": {key: job[key] for key in ("run", "done", "total", "failed", "error", "status")} if job else None,
+    }
+    if items:
+        state["items"] = found
+    return state
+
+
+@app.get("/api/analysis/{sid}")
+@_storage_guard
+def analysis(sid: str, run: str, items: bool = True):
+    """画面分析进度与结果（按当前结果的顺序，未分析的为 null）。只读。"""
+    return _analysis_state(sid, run, items)
+
+
+@app.post("/api/analysis/{sid}")
+@_storage_guard
+def start_analysis(sid: str, payload: dict):
+    """开始分析这组结果里还没分析过的图片；已经在算时直接返回进度。"""
+    run = payload.get("run")
+    ses = _session(sid)
+    result = ses.get("results", {}).get(run) if isinstance(run, str) else None
+    if not result:
+        raise HTTPException(404, "结果已更新，请刷新")
+    job = _analysis_jobs.get(sid)
+    if job and job["status"] == "running":
+        if job["run"] != run:
+            raise HTTPException(409, "另一组结果正在分析画面，请稍候")
+        return _analysis_state(sid, run, items=False)
+    items = _analysis_cache(sid)
+    todo = {}
+    for i in range(len(result["cuts"])):
+        key = _asset_key(result, i)
+        if key not in items and key not in todo:
+            todo[key] = workspace_store.asset_path(WORK, sid, result, i)
+    todo = list(todo.items())
+    job = {"run": run, "status": "running" if todo else "done", "done": 0, "total": len(todo), "failed": 0, "error": ""}
+    _analysis_jobs[sid] = job
+    if todo:
+        # 计算期间占用这条记录：旧图不会被回收，空间管理也不会清理它。
+        _storage.active[sid] = _storage.active.get(sid, 0) + 1
+        threading.Thread(target=_run_analysis, args=(sid, job, todo, items), daemon=True).start()
+    return _analysis_state(sid, run, items=False)
 
 
 @app.get("/api/thumb/{sid}/{run}/{i}")

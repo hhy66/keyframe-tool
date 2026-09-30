@@ -64,6 +64,7 @@ const Viewer = {
     this.el('#vwPrev').disabled = i === 0;
     this.el('#vwNext').disabled = i === count - 1;
     this.el('#vwEdit').disabled = !state.cards?.[i] || state.cards[i].edit.disabled;
+    if (typeof Analysis !== 'undefined') Analysis.paintViewer(i);
     this.paint();
     this.preload(i);
   },
@@ -155,7 +156,7 @@ const Viewer = {
     const target = event.target || {};
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) && target.type !== 'checkbox') return;
     // Letters follow the physical key so they also work with a Chinese input method on.
-    const key = {KeyE: 'e', KeyD: 'd', KeyX: 'x'}[event.code] || event.key.toLowerCase();
+    const key = {KeyA: 'a', KeyE: 'e', KeyD: 'd', KeyX: 'x'}[event.code] || event.key.toLowerCase();
     const actions = {
       arrowleft: () => this.show(this.index - 1),
       arrowright: () => this.show(this.index + 1),
@@ -166,6 +167,7 @@ const Viewer = {
       home: () => this.show(0),
       end: () => this.show(this.count() - 1),
       e: () => this.edit(),
+      a: () => typeof Analysis !== 'undefined' && Analysis.togglePanel(),
       d: () => this.el('#vwDownload').click(),
       escape: () => this.close(),
     };

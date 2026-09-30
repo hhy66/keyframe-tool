@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/collage.css">
 <link rel="stylesheet" href="/layout.css">
 <link rel="stylesheet" href="/viewer.css">
+<link rel="stylesheet" href="/analysis.css">
 <style>
   :root{
     --accent:#4f46e5; --accent2:#7c3aed; --bg:#f3f4fb; --card:#ffffff;
@@ -330,6 +331,7 @@
       <button class="btn ghost small" id="btnAll">全选</button>
       <button class="btn ghost small" id="btnNone">全不选</button>
       <button class="btn ghost small" id="btnSkipSimilar" hidden title="跳过与上一张几乎相同的截图，保留每组的第一张">跳过相似画面</button>
+      <button class="btn ghost small" id="btnAnalyze" hidden title="在本机分析每张图的色彩、影调、画幅与明暗分布，不联网">分析画面</button>
       <button class="btn ghost small" id="btnCollage">制作参考拼图</button>
       <button class="btn" id="btnDownload">⬇ 下载所选关键帧 (zip)</button>
     </div>
@@ -344,7 +346,7 @@
         <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>保留 / 跳过，并自动进入下一张</td></tr>
         <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>上一张 / 下一张；<kbd>Home</kbd> <kbd>End</kbd> 跳到首尾</td></tr>
         <tr><td><kbd>空格</kbd></td><td>切换保留 / 跳过，停在当前这张</td></tr>
-        <tr><td><kbd>E</kbd> · <kbd>D</kbd> · <kbd>Esc</kbd></td><td>逐帧微调 · 下载原图 · 回到网格</td></tr>
+        <tr><td><kbd>A</kbd> · <kbd>E</kbd> · <kbd>D</kbd> · <kbd>Esc</kbd></td><td>显示 / 隐藏画面分析 · 逐帧微调 · 下载原图 · 回到网格</td></tr>
         <tr><th colspan="2">结果网格</th></tr>
         <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>移动当前卡片（蓝框）</td></tr>
         <tr><td><kbd>空格</kbd> 或 <kbd>X</kbd></td><td>保留 / 跳过当前卡片</td></tr>
@@ -383,6 +385,7 @@
     <div class="vwTools">
       <span id="vwStats" class="vwStats"></span>
       <a id="vwDownload" class="vwBtn" title="下载这张原图（D）">下载原图</a>
+      <button type="button" id="vwInfo" class="vwBtn" aria-pressed="true" aria-controls="vwAnalysis" title="显示 / 隐藏画面分析（A）">画面分析</button>
       <button type="button" id="vwEdit" class="vwBtn" title="关闭大图，逐帧微调这张（E）">逐帧微调</button>
       <button type="button" id="lbClose" class="vwBtn" title="回到网格（Esc）">关闭</button>
     </div>
@@ -395,13 +398,14 @@
     </figure>
     <button type="button" class="vwNav next" id="vwNext" aria-label="下一张（→）">›</button>
   </div>
+  <aside class="vwPanel" id="vwAnalysis" hidden aria-label="画面分析"></aside>
   <div class="vwBottom">
     <div class="vwDecide">
       <button type="button" class="vwChoice skip" id="vwSkip" aria-pressed="false"><kbd>↓</kbd> 跳过并下一张</button>
       <button type="button" class="vwChoice keep" id="vwKeep" aria-pressed="true"><kbd>↑</kbd> 保留并下一张</button>
     </div>
     <div class="vwStrip" id="vwStrip" aria-label="全部截图"></div>
-    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · E 微调 · D 下载 · Esc 关闭</div>
+    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · A 画面分析 · E 微调 · D 下载 · Esc 关闭</div>
   </div>
 </div>
 
@@ -464,6 +468,7 @@
 <script src="/layout.js"></script>
 <script src="/review.js"></script>
 <script src="/viewer.js"></script>
+<script src="/analysis.js"></script>
 <div id="collagePanel" class="appView" hidden role="region" aria-labelledby="collageTitle">
   <div class="viewHead">
     <button type="button" class="btn ghost small viewBack" id="collageClose">← 返回关键帧结果</button>

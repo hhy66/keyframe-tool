@@ -16,6 +16,7 @@ import workspace_store as store
 from collage_engine import managed_file
 
 MANAGEMENT = '.storage'
+ANALYSIS_FILE = 'analysis.json'  # 画面分析结果，与 server.ANALYSIS_FILE 相同
 
 
 def now():
@@ -119,6 +120,7 @@ class Manager:
     def invalidate(self, sid):
         self.s._sessions.pop(sid, None)
         self.s._jobs.pop(sid, None)
+        getattr(self.s, '_analysis_items', {}).pop(sid, None)
 
     def audit(self, event, **data):
         with (self.management() / 'audit.jsonl').open('a', encoding='utf-8') as out:
@@ -230,7 +232,8 @@ class Manager:
         video = ses.get('video_path')
         cache = ses.get('cache_file')
         vp = tree(video) if video else []
-        cp = tree(store.safe_path(d, cache)) if cache else []
+        # 画面分析结果和扫描缓存一样可以重新计算，一起算作缓存。
+        cp = (tree(store.safe_path(d, cache)) if cache else []) + tree(store.safe_path(d, ANALYSIS_FILE))
         tmp = [
             x
             for x in tree(store.safe_path(d, 'exports'))
@@ -403,7 +406,7 @@ class Manager:
             elif kind == 'video':
                 paths = [Path(ses['video_path']).name] if ses.get('video_path') else []
             elif kind == 'cache':
-                paths = [ses['cache_file']] if ses.get('cache_file') else []
+                paths = ([ses['cache_file']] if ses.get('cache_file') else []) + [ANALYSIS_FILE]
             elif kind == 'session':
                 paths = ['.']
             else:
@@ -423,6 +426,8 @@ class Manager:
                     if rel.startswith('thumbs/')
                     else '临时导出文件 ' + Path(rel).name
                     if rel.startswith('exports/')
+                    else '画面分析结果'
+                    if rel == ANALYSIS_FILE
                     else {
                         'session': '整条工作记录（含全部版本及未知文件）',
                         'video': '工作区中的视频副本',
@@ -434,7 +439,7 @@ class Manager:
                 'versions': ['所选历史版本从工作区移除，当前结果保留。移入回收区可尝试恢复；永久删除后不能恢复。'],
                 'temporary': ['临时ZIP与拼图成品可重新生成，不影响其他目录的下载文件。'],
                 'video': ['不能继续分析、补帧或微调；已有截图仍可下载。原始视频不受影响。'],
-                'cache': ['后续分析和逐帧编辑需要重新扫描；已有截图保留。'],
+                'cache': ['后续分析和逐帧编辑需要重新扫描；画面分析需要重新计算；已有截图保留。'],
                 'session': ['整条工作记录及全部版本将移除。', f'包括未知文件 {info["unknown_bytes"]} 字节。'],
             }[kind]
             retained = ['工作区外原始视频、已下载文件均保留。'] + (

@@ -158,6 +158,7 @@ const Review = {
 
 function onResultsRendered(res) {
   Review.loadSimilar(res);
+  if (typeof Analysis !== 'undefined') Analysis.load(res);
   if (state.cursor != null) Review.setCursor(state.cursor);
   // New results while reviewing: refresh the film strip and stay on the same position.
   if (typeof Viewer !== 'undefined' && Viewer.isOpen()) {
