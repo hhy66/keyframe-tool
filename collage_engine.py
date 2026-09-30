@@ -4,6 +4,7 @@ import io
 import math
 import os
 import re
+import sys
 from pathlib import Path
 from statistics import median
 
@@ -27,6 +28,8 @@ PER_PAGE = {4: 2, 9: 3, 12: 4, 16: 4}
 LABEL_POSITIONS = ('tl', 'tr', 'bl', 'br', 'below')
 NOTE_LIMIT = 60
 BASE = Path(__file__).resolve().parent
+# In the portable build, fonts/ sits next to the executable rather than the unpacked code.
+APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else BASE
 _font_path = None
 
 
@@ -54,7 +57,8 @@ def font_path():
         return _font_path or None
     windows = Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Fonts'
     candidates = [os.environ.get('KEYFRAME_FONT', '')]
-    candidates += sorted(str(p) for p in (BASE / 'fonts').glob('*') if p.suffix.lower() in ('.ttf', '.otf', '.ttc'))
+    for folder in dict.fromkeys((APP_DIR / 'fonts', BASE / 'fonts')):
+        candidates += sorted(str(p) for p in folder.glob('*') if p.suffix.lower() in ('.ttf', '.otf', '.ttc'))
     candidates += [str(windows / n) for n in ('msyh.ttc', 'msyhbd.ttc', 'simhei.ttf', 'Deng.ttf', 'simsun.ttc')]
     candidates += [
         '/System/Library/Fonts/PingFang.ttc', '/System/Library/Fonts/STHeiti Medium.ttc',
