@@ -264,6 +264,8 @@ function render(res, restoreParams = true) {
   $('#resultNote').textContent = res.meta?.gallery_only ? '旧版截图已恢复；原时间码和帧号未保存，因此标记为时间未知。可直接下载；重新分析可生成精确结果，旧文件不会删除。' : res.meta?.can_edit === false ? '截图和时间记录已恢复，可直接下载。需要重新分析以重建逐帧缓存后，才能继续补帧或微调。' : res.meta?.estimated_time ? '此视频部分时间戳不可用，时间码按帧率估算；截图仍按帧编号定位。' : '';
   const grid = $('#grid'); grid.innerHTML = '';
   $('#empty').hidden = state.cuts.length !== 0;
+  state.cards = []; state.anchor = null;
+  if (state.cursor != null && state.cursor >= state.cuts.length) state.cursor = null;
   state.cuts.forEach((c, i) => {
     const item = document.createElement('div'); item.className = 'item';
     const img = document.createElement('img');
@@ -282,10 +284,17 @@ function render(res, restoreParams = true) {
       const selected = state.sel.has(i);
       item.classList.toggle('off', !selected); tag.hidden = selected; checkbox.checked = selected;
     };
-    const toggle = () => {
+    // Shift+单击：把上次单击到这次之间的所有卡片设为与这张相同的保留 / 跳过状态。
+    const toggle = ev => {
       if (state.busy || state.editBusy) return;
-      if (state.sel.has(i)) state.sel.delete(i); else state.sel.add(i);
-      paint(); rememberSelection(); updateToolbar();
+      const keep = !state.sel.has(i);
+      const range = ev?.shiftKey && state.anchor != null && state.anchor !== i;
+      const from = range ? Math.min(state.anchor, i) : i, to = range ? Math.max(state.anchor, i) : i;
+      const indexes = [];
+      for (let k = from; k <= to; k++) indexes.push(k);
+      state.anchor = i;
+      setKept(indexes, keep);
+      if (typeof Review !== 'undefined') Review.setCursor(i); else state.cursor = i;
     };
     const editRow = document.createElement('div'); editRow.className = 'editRow';
     const edit = document.createElement('button'); edit.className = 'btn ghost small'; edit.textContent = '逐帧微调';
@@ -297,10 +306,18 @@ function render(res, restoreParams = true) {
     img.addEventListener('click', ev => {ev.stopPropagation(); openLb(i);});
     checkbox.addEventListener('click', ev => {ev.stopPropagation(); toggle();});
     item.addEventListener('click', toggle);
+    state.cards.push({item, cap, paint, toggle, edit});
     paint(); grid.appendChild(item);
   });
   updateToolbar();
   configureEditor(res);
+  if (typeof onResultsRendered === 'function') onResultsRendered(res);
+}
+
+function setKept(indexes, keep) {
+  if (state.busy || state.editBusy || !indexes.length) return;
+  indexes.forEach(i => { if (keep) state.sel.add(i); else state.sel.delete(i); state.cards[i]?.paint(); });
+  rememberSelection(); updateToolbar();
 }
 
 function configureEditor(res) {
@@ -431,9 +448,11 @@ function updateToolbar() {
   $('#cntAll').textContent = state.cuts.length; $('#cntSel').textContent = state.sel.size;
   $('#btnDownload').disabled = state.dlBusy || state.sel.size === 0 || state.sel.size > state.maxExport;
   $('#exportLimit').textContent = `单次最多 ${state.maxExport} 张` + (state.sel.size > state.maxExport ? '，请减少选择后下载。' : '；下载交给浏览器保存。');
+  if (typeof Review !== 'undefined') Review.updateSkipButton();
 }
 function openLb(i) {
   if (!state.frames[i]) return;
+  state.lbIndex = i;
   $('#lbImg').src = state.frames[i];
   const c = state.cuts[i];
   $('#lbCap').textContent = '#' + String(i + 1).padStart(3, '0') + '  ' + c.label + ' · ' + (kindName[c.kind] || c.kind) + (c.frame_index == null ? ' · 原帧号未知' : ' · 第 ' + (c.frame_index + 1) + ' 帧');

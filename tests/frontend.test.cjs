@@ -207,3 +207,16 @@ test('skip state follows the detected cut, not the captured frame',()=>{
   app.run("state.sid='s1'; render(fixture);");
   assert.equal(app.run('state.sel.has(1)'),false);assert.equal(app.run('state.sel.has(0)'),true);
 });
+
+test('shift-click keeps or skips a whole range in one go',()=>{
+  const app=boot();
+  app.context.fixture={...result,cuts:Array.from({length:6},(_,i)=>({kind:'cut',frame_index:i*10,time:i,label:`t${i}`})),
+    thumbs:Array(6).fill('/t'),frames:Array(6).fill('/f')};
+  app.run("state.sid='s1'; render(fixture);");
+  const click=(i,shiftKey=false)=>app.run(`state.cards[${i}]`).toggle({shiftKey});
+  click(1);                       // skip #2, anchor at 1
+  click(4,true);                  // #5 is kept, so the range 1..4 becomes skipped
+  assert.equal(app.run('[...state.sel].sort().join()'),'0,5');
+  click(2,true);                  // #3 is skipped, so 2..4 become kept again
+  assert.equal(app.run('[...state.sel].sort().join()'),'0,2,3,4,5');
+});

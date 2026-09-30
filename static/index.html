@@ -324,6 +324,7 @@
       <div class="info">共 <b id="cntAll">0</b> 张 · 选中 <b id="cntSel">0</b> 张</div>
       <button class="btn ghost small" id="btnAll">全选</button>
       <button class="btn ghost small" id="btnNone">全不选</button>
+      <button class="btn ghost small" id="btnSkipSimilar" hidden title="跳过与上一张几乎相同的截图，保留每组的第一张">跳过相似画面</button>
       <button class="btn ghost small" id="btnCollage">制作参考拼图</button>
       <button class="btn" id="btnDownload">⬇ 下载所选关键帧 (zip)</button>
     </div>
@@ -331,6 +332,17 @@
       💡 <b>勾选或单击卡片</b>=保留 / 跳过（跳过的不会打包）· <b>单击缩略图</b>=查看原分辨率大图并可单张下载。
       页面里的网格只是压缩预览，<b>zip 打包的均为视频原始分辨率 JPEG 图片</b>（JPEG 质量 95）。
     </div>
+    <details class="shortcuts" id="shortcutHelp">
+      <summary>快捷键：← → ↑ ↓ 移动 · 空格 保留/跳过 · Enter 看大图 · Shift+单击 范围选择（点此或按 ? 查看全部）</summary>
+      <table>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>在结果中移动当前卡片（蓝框）</td></tr>
+        <tr><td><kbd>空格</kbd> 或 <kbd>X</kbd></td><td>保留 / 跳过当前卡片</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>查看当前卡片的原图；大图里用 <kbd>←</kbd> <kbd>→</kbd> 翻页，<kbd>空格</kbd> 保留 / 跳过，<kbd>Esc</kbd> 关闭</td></tr>
+        <tr><td><kbd>E</kbd></td><td>逐帧微调当前卡片</td></tr>
+        <tr><td><kbd>Shift</kbd> + 单击</td><td>把上次单击到这次之间的卡片设为同样的保留 / 跳过</td></tr>
+        <tr><td><kbd>?</kbd></td><td>展开 / 收起本说明</td></tr>
+      </table>
+    </details>
     <div class="hint left" id="exportLimit"></div>
     <div class="hint left" id="resultNote"></div>
     <div id="grid"></div>
@@ -405,6 +417,7 @@
 <script src="/app.js"></script>
 <script src="/storage.js"></script>
 <script src="/layout.js"></script>
+<script src="/review.js"></script>
 <div id="collagePanel" class="collageOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="collageTitle">
   <div class="collageEditor">
     <div class="collageHeader">

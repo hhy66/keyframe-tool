@@ -840,6 +840,49 @@ def status(sid: str):
     }
 
 
+SIMILAR_THRESHOLD = 80.0      # 相似度 ≥ 80% 视为“与上一张几乎相同”
+_similar_cache: dict[tuple, dict] = {}
+
+
+def _signature(image):
+    """32×18 的缩略颜色图：轻微运动和压缩噪点影响很小，换了画面则差异明显。"""
+    return cv2.resize(image, (32, 18), interpolation=cv2.INTER_AREA)
+
+
+def _similarity(a, b):
+    """0～100：两张缩略图的平均色差换算成百分比，100 表示完全相同。"""
+    return round(max(0.0, 100.0 - float(np.mean(cv2.absdiff(a, b))) * 100.0 / 48.0), 1)
+
+
+@app.get("/api/similar/{sid}")
+@_storage_guard
+def similar(sid: str, run: str):
+    """每张截图与前一张的相似度，用于提示并一键跳过重复画面。只读，不修改结果。"""
+    ses = _session(sid)
+    result = ses.get("results", {}).get(run)
+    if not result:
+        raise HTTPException(404, "结果已更新，请刷新")
+    key = (sid, run)
+    if key not in _similar_cache:
+        signatures = []
+        for i in range(len(result["cuts"])):
+            try:
+                path = workspace_store.asset_path(WORK, sid, result, i, "thumbs")
+                if not path.is_file():
+                    path = workspace_store.asset_path(WORK, sid, result, i)
+                # np.fromfile + imdecode 支持 Windows 中文路径
+                image = cv2.imdecode(np.fromfile(str(path), np.uint8), cv2.IMREAD_COLOR) if path.is_file() else None
+            except (ValueError, OSError):
+                image = None
+            signatures.append(None if image is None else _signature(image))
+        scores = [None if i == 0 or a is None or signatures[i - 1] is None else _similarity(signatures[i - 1], a)
+                  for i, a in enumerate(signatures)]
+        if len(_similar_cache) > 64:
+            _similar_cache.clear()
+        _similar_cache[key] = {"run": run, "scores": scores, "threshold": SIMILAR_THRESHOLD}
+    return _similar_cache[key]
+
+
 @app.get("/api/thumb/{sid}/{run}/{i}")
 @_storage_guard
 def thumb(sid: str, run: str, i: int):
