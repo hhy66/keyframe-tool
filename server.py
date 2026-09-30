@@ -26,6 +26,7 @@ from pathlib import Path
 
 import cv2
 import frame_analysis
+import motion
 import numpy as np
 import shots
 import uvicorn
@@ -822,6 +823,7 @@ def similar(sid: str, run: str):
 ANALYSIS_FILE = "analysis.json"
 STRIP_DIR = "strip"
 _analysis_items: dict[str, dict] = {}  # session_id -> {"run/编号": 分析结果}
+_motion_items: dict[str, dict] = {}  # session_id -> {"起始帧-结束帧": 运镜}
 _analysis_jobs: dict[str, dict] = {}  # session_id -> {run, status, done, total, failed, error}
 _analysis_write = threading.Lock()
 
@@ -831,37 +833,72 @@ def _asset_key(result, i):
     return f"{run}/{number}"
 
 
+def _load_analysis(sid):
+    """读 analysis.json：截图分析按图片文件，运镜按镜头起止帧；算法版本不同的部分直接作废。"""
+    items, moves = {}, {}
+    try:
+        data = json.loads(workspace_store.safe_path(WORK, sid, ANALYSIS_FILE).read_text(encoding="utf-8"))
+        if data.get("version") == frame_analysis.ANALYSIS_VERSION and isinstance(data.get("items"), dict):
+            items = data["items"]
+        if data.get("motion_version") == motion.MOTION_VERSION and isinstance(data.get("motion"), dict):
+            moves = data["motion"]
+    except (OSError, ValueError, AttributeError):
+        pass
+    _analysis_items[sid], _motion_items[sid] = items, moves
+
+
 def _analysis_cache(sid):
-    """已算好的分析结果；算法版本不同的旧缓存直接作废。"""
+    """已算好的截图分析结果。"""
     if sid not in _analysis_items:
-        items = {}
-        try:
-            data = json.loads(workspace_store.safe_path(WORK, sid, ANALYSIS_FILE).read_text(encoding="utf-8"))
-            if data.get("version") == frame_analysis.ANALYSIS_VERSION and isinstance(data.get("items"), dict):
-                items = data["items"]
-        except (OSError, ValueError, AttributeError):
-            pass
-        _analysis_items[sid] = items
+        _load_analysis(sid)
     return _analysis_items[sid]
 
 
+def _motion_cache(sid):
+    """已算好的各镜头运镜。"""
+    if sid not in _motion_items:
+        _load_analysis(sid)
+    return _motion_items[sid]
+
+
+def _motion_key(span):
+    return f"{span['start_frame']}-{span['end_frame']}"
+
+
 def _save_analysis(sid, items):
-    """只保留仍被某个结果引用的图片，删掉的历史版本不会一直留在缓存里。"""
+    """只保留仍被某个结果引用的图片和镜头，删掉的历史版本不会一直留在缓存里。"""
+    moves = _motion_cache(sid)
     with _lock:
         ses = _sessions.get(sid)
         if ses is None:
             return
         live = {_asset_key(res, i) for res in ses.get("results", {}).values() for i in range(len(res["cuts"]))}
+        spans = {_motion_key(span) for res in ses.get("results", {}).values() for span in _spans(ses, res) if span}
     kept = {key: value for key, value in list(items.items()) if key in live}
+    kept_moves = {key: value for key, value in list(moves.items()) if key in spans}
     with _analysis_write:
         workspace_store.atomic_json(
             workspace_store.safe_path(WORK, sid, ANALYSIS_FILE),
-            {"version": frame_analysis.ANALYSIS_VERSION, "items": kept},
+            {
+                "version": frame_analysis.ANALYSIS_VERSION,
+                "items": kept,
+                "motion_version": motion.MOTION_VERSION,
+                "motion": kept_moves,
+            },
         )
 
 
 def _spans(ses, result):
     return shots.spans(result, ses.get("cache", {}).get("times"))
+
+
+def _spans_for_export(sid, ses, result):
+    """导出用：镜头起止、时长，以及已算好的运镜描述。"""
+    moves = _motion_cache(sid)
+    return [
+        None if span is None else {**span, "motion": (moves.get(_motion_key(span)) or {}).get("text", "")}
+        for span in _spans(ses, result)
+    ]
 
 
 def _has_video(ses):
@@ -877,18 +914,28 @@ def _live_strip_frames(ses):
     return {frame for res in ses.get("results", {}).values() for frame in _strip_frames(ses, res)}
 
 
-def _run_analysis(sid, job, todo, items, strip=None):
+def _run_analysis(sid, job, todo, items, video_work=None):
     status, error = "done", ""
     try:
         offset = 0
-        if strip:
-            video, frames = strip
+        if video_work:
+            # 一次顺序读视频：截镜头小图，同时测运镜
             root = workspace_store.safe_path(WORK, sid, STRIP_DIR)
 
             def progress(n, total):
                 job["done"] = n
 
-            job["strip_failed"] = len(shots.extract(video, frames, root, progress))
+            failed, moves = shots.scan(
+                video_work["video"],
+                video_work["spans"],
+                root,
+                video_work["strips"],
+                video_work["times"],
+                video_work["fps"],
+                progress,
+            )
+            job["strip_failed"] = len(failed)
+            _motion_cache(sid).update(moves)
             offset = job["done"]
             with _lock:
                 ses = _sessions.get(sid)
@@ -924,18 +971,26 @@ def _analysis_state(sid, run, items=True):
     ready = sum(item is not None for item in found)
     spans = _spans(ses, result)
     root = workspace_store.safe_path(WORK, sid, STRIP_DIR)
-    # 原视频被清理后截不了镜头小图：不算未完成，页面会说明
-    strip_missing = len(shots.missing(root, _strip_frames(ses, result))) if _has_video(ses) else 0
+    moves = _motion_cache(sid)
+    # 原视频被清理后截不了镜头小图、测不了运镜：不算未完成，页面会说明
+    video = _has_video(ses)
+    strip_missing = len(shots.missing(root, _strip_frames(ses, result))) if video else 0
+    motion_missing = sum(1 for span in spans if span and _motion_key(span) not in moves) if video else 0
     job = _analysis_jobs.get(sid)
     running = bool(job and job["status"] == "running")
     state = {
         "run": run,
         "version": frame_analysis.ANALYSIS_VERSION,
-        "status": "running" if running else "done" if ready == len(found) and not strip_missing else "idle",
+        "status": "running"
+        if running
+        else "done"
+        if ready == len(found) and not strip_missing and not motion_missing
+        else "idle",
         "ready": ready,
         "total": len(found),
         "strip_missing": strip_missing,
-        "video": _has_video(ses),
+        "motion_missing": motion_missing,
+        "video": video,
         "job": {key: job.get(key) for key in ("run", "done", "total", "failed", "strip_failed", "error", "status")}
         if job
         else None,
@@ -945,7 +1000,11 @@ def _analysis_state(sid, run, items=True):
         state["shots"] = [
             None
             if span is None
-            else {**span, "strip_ready": [shots.strip_path(root, frame).is_file() for frame in span["strip"]]}
+            else {
+                **span,
+                "strip_ready": [shots.strip_path(root, frame).is_file() for frame in span["strip"]],
+                "motion": moves.get(_motion_key(span)),
+            }
             for span in spans
         ]
     return state
@@ -979,9 +1038,28 @@ def start_analysis(sid: str, payload: dict):
         if key not in items and key not in todo:
             todo[key] = workspace_store.asset_path(WORK, sid, result, i)
     todo = list(todo.items())
-    frames = shots.missing(workspace_store.safe_path(WORK, sid, STRIP_DIR), _strip_frames(ses, result))
-    strip = (ses["video_path"], frames) if frames and _has_video(ses) else None
-    work = len(todo) + (len(frames) if strip else 0)
+    video_work, reads = None, 0
+    if _has_video(ses):
+        frames = shots.missing(workspace_store.safe_path(WORK, sid, STRIP_DIR), _strip_frames(ses, result))
+        moves = _motion_cache(sid)
+        pending = {}
+        for span in _spans(ses, result):
+            if span and _motion_key(span) not in moves:
+                pending[_motion_key(span)] = span
+        if frames or pending:
+            samples = {
+                f for span in pending.values() for f in motion.sample_frames(span["start_frame"], span["end_frame"])
+            }
+            reads = len(set(frames) | samples)
+            cache = ses.get("cache", {})
+            video_work = {
+                "video": ses["video_path"],
+                "spans": list(pending.items()),
+                "strips": frames,
+                "times": cache.get("times"),
+                "fps": float((result.get("meta") or {}).get("fps") or cache.get("fps") or 25.0),
+            }
+    work = len(todo) + reads
     job = {
         "run": run,
         "status": "running" if work else "done",
@@ -995,7 +1073,7 @@ def start_analysis(sid: str, payload: dict):
     if work:
         # 计算期间占用这条记录：旧图不会被回收，空间管理也不会清理它。
         _storage.active[sid] = _storage.active.get(sid, 0) + 1
-        threading.Thread(target=_run_analysis, args=(sid, job, todo, items, strip), daemon=True).start()
+        threading.Thread(target=_run_analysis, args=(sid, job, todo, items, video_work), daemon=True).start()
     return _analysis_state(sid, run, items=False)
 
 
@@ -1086,9 +1164,9 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
     lines = [
         "# 关键帧列表（零基帧号及实际时间码）；镜头起止为该截图所在镜头",
         f"# 视频: {result['video_name']}",
-        "# 文件\t时间码\t类型\t帧号\t镜头开始\t镜头结束\t镜头时长(秒)",
+        "# 文件\t时间码\t类型\t帧号\t镜头开始\t镜头结束\t镜头时长(秒)\t运镜",
     ]
-    spans = _spans(_session(sid), result)
+    spans = _spans_for_export(sid, _session(sid), result)
     try:
         with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
             for i in wanted:
@@ -1098,7 +1176,9 @@ def _export_archive(sid: str, ids: str = "", run: str = ""):
                 index = cuts[i]["frame_index"] if cuts[i]["frame_index"] is not None else "unknown"
                 span = spans[i]
                 timing = (
-                    f"\t{_fmt_time(span['start'])}\t{_fmt_time(span['end'])}\t{span['duration']:.2f}" if span else ""
+                    f"\t{_fmt_time(span['start'])}\t{_fmt_time(span['end'])}\t{span['duration']:.2f}\t{span['motion']}"
+                    if span
+                    else ""
                 )
                 lines.append(f"{stem}.jpg\t{cuts[i]['label']}\t{cuts[i]['kind']}\t{index}{timing}")
             archive.writestr("cuts.txt", "\n".join(lines))
@@ -1364,7 +1444,8 @@ def render_all_collages(sid: str, payload: dict):
                 archive.write(scratch, f"参考拼图_{video_name}_{page['page']:02d}.{ext}")
                 scratch.unlink()
             archive.writestr(
-                '分镜表.csv', collage_engine.storyboard_csv(payload, result['cuts'], _spans(_session(sid), result))
+                '分镜表.csv',
+                collage_engine.storyboard_csv(payload, result['cuts'], _spans_for_export(sid, _session(sid), result)),
             )
         filename = f'参考拼图_{video_name}_共{len(pages)}张.zip'
         workspace_store.atomic_json(
@@ -1402,7 +1483,7 @@ def collage_storyboard(sid: str, payload: dict):
     _collage_options(payload)
     name = quote(f'分镜表_{_collage_video_name(sid)}.csv')
     return Response(
-        collage_engine.storyboard_csv(payload, result['cuts'], _spans(_session(sid), result)),
+        collage_engine.storyboard_csv(payload, result['cuts'], _spans_for_export(sid, _session(sid), result)),
         media_type='text/csv; charset=utf-8',
         headers={'Content-Disposition': f"attachment; filename*=UTF-8''{name}"},
     )
