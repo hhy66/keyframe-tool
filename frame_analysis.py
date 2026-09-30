@@ -13,8 +13,10 @@ import numpy as np
 
 import shot_analysis
 
-ANALYSIS_VERSION = 3  # 算法或阈值改变时加一，旧缓存会自动重算
+ANALYSIS_VERSION = 4  # 算法或阈值改变时加一，旧缓存会自动重算
 WORK_SIZE = 640  # 分析用图的最长边
+DETAIL_SIZE = 1280  # 找人脸用图的最长边：远处的小人脸需要更多像素
+DARK_LIGHTNESS = 15  # Lab 亮度低于此值的像素不计入饱和度
 PALETTE_SIZE = 160  # 主色聚类用图的最长边
 
 # 画幅：黑边行的亮度上限（取该行 90% 分位，零星字幕不影响）；黑边最多占一侧的比例
@@ -137,7 +139,8 @@ def _hue_name(hue, lightness, chroma):
         (85, '橙'),
         (110, '黄'),
         (130, '黄绿'),
-        (170, '绿'),
+        (160, '绿'),
+        (185, '青绿'),
         (235, '青'),
         (315, '蓝'),
         (340, '紫'),
@@ -232,7 +235,10 @@ def temperature(lab):
 
 
 def saturation(lab):
-    mean = float(np.hypot(lab[..., 1], lab[..., 2]).mean())
+    """不算接近纯黑的像素：夜景里大片黑色会把霓虹、火光这些鲜艳颜色的饱和度"平均"掉。"""
+    chroma = np.hypot(lab[..., 1], lab[..., 2])
+    lit = lab[..., 0] > DARK_LIGHTNESS
+    mean = float(chroma[lit].mean() if lit.mean() >= 0.05 else chroma.mean())
     label = (
         '接近黑白'
         if mean < 4
@@ -273,19 +279,32 @@ def accent(lab, colors):
         pixels = lab.reshape(-1, 3)[vivid][picked]
         center = pixels.mean(axis=0)
         lightness, ca, cb = (float(v) for v in center)
+        spot_hue = math.degrees(math.atan2(cb, ca)) % 360
         return {
-            'name': _hue_name(math.degrees(math.atan2(cb, ca)) % 360, lightness, math.hypot(ca, cb)),
+            'name': _hue_name(spot_hue, lightness, math.hypot(ca, cb)),
             'hex': _hex(center),
             'share': round(float(counts[index]), 3),
+            'hue': round(spot_hue, 1),
         }
     return None
 
 
-def harmony(colors):
-    """主色之间的色相关系。只看占比不少于 8% 的有彩色。"""
-    vivid = [c for c in colors if c['chroma'] >= 15 and c['share'] >= 0.08]
+def harmony(colors, spot=None, warmth=''):
+    """主色之间的色相关系。暗场景里有彩色只占一小块，所以占比按"有彩色部分"来算，不按整幅画面。
+    主色只有一种冷暖倾向、点缀色又正好相反时，算冷暖对比（如青色背景里的暖色皮肤）。"""
+    colored = [c for c in colors if c['chroma'] >= 12]
+    total = sum(c['share'] for c in colored)
+    vivid = [c for c in colored if c['chroma'] >= 15 and c['share'] >= 0.02 and c['share'] >= 0.2 * total]
+    contrast = None
+    if spot and warmth in ('暖调', '冷调'):
+        spot_warmth = _warmth(spot['hue'])
+        if spot_warmth and spot_warmth != (1 if warmth == '暖调' else -1):
+            contrast = {'label': '冷暖对比', 'note': f'{warmth[0]}色为主，{spot["name"]}点缀'}
     if not vivid:
-        return {'label': '低饱和 / 无明显主色', 'note': ''}
+        return contrast or {'label': '低饱和 / 无明显主色', 'note': ''}
+    same = len({_warmth(c['hue']) for c in vivid}) == 1
+    if contrast and same:
+        return contrast  # 主色都是同一冷暖，靠点缀色形成对比，这才是画面的配色重点
     if len(vivid) == 1:
         return {'label': '单色主导', 'note': f'以{vivid[0]["name"]}为主'}
     pairs = [(x, y) for i, x in enumerate(vivid) for y in vivid[i + 1 :]]
@@ -399,6 +418,16 @@ def analyze(bgr):
     lab = _lab(content)
     lightness = lab[..., 0] / 100.0
     colors = palette(content)
+    spot = accent(lab, colors)
+    warmth = temperature(lab)
+    # 人脸检测用更清楚的图：远处的小人脸在分析图上只有几个像素
+    top, bottom = round(bars['top'] / scale), round(bars['bottom'] / scale)
+    left, right = round(bars['left'] / scale), round(bars['right'] / scale)
+    detail = bgr[top : height - bottom, left : width - right]
+    detail_scale = min(1.0, DETAIL_SIZE / max(detail.shape[:2]))
+    if detail_scale < 1:
+        size = (max(8, round(detail.shape[1] * detail_scale)), max(8, round(detail.shape[0] * detail_scale)))
+        detail = cv2.resize(detail, size, interpolation=cv2.INTER_AREA)
     result = {
         'version': ANALYSIS_VERSION,
         'size': [width, height],
@@ -419,14 +448,14 @@ def analyze(bgr):
         },
         'color': {
             'palette': colors,
-            'temperature': temperature(lab),
+            'temperature': warmth,
             'saturation': saturation(lab),
-            'harmony': harmony(colors),
-            'accent': accent(lab, colors),
+            'harmony': harmony(colors, spot, warmth['label']),
+            'accent': spot,
         },
         'tone': tone(lightness),
         'light': light_layout(lightness),
-        **shot_analysis.analyze(content),
+        **shot_analysis.analyze(content, detail),
     }
     result['tags'] = tags(result)
     return result

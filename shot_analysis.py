@@ -23,7 +23,7 @@ PERSON_SCORE = 0.5
 
 # 景别：主体人脸框高度占画面高度的比例（人脸框约为额头到下巴）。
 # 国内常用分法：远景（人很小、环境为主）/ 全景（全身）/ 中景（膝盖以上）/ 近景（胸部以上）/ 特写（肩部以上）/ 大特写（脸的局部）。
-SHOT_BY_FACE = [(0.72, '大特写'), (0.40, '特写'), (0.19, '近景'), (0.11, '中景'), (0.05, '全景'), (0.0, '远景')]
+SHOT_BY_FACE = [(0.75, '大特写'), (0.48, '特写'), (0.19, '近景'), (0.11, '中景'), (0.05, '全景'), (0.0, '远景')]
 PERSON_FULL = 0.35  # 没有正脸时：完整的人体框高于此比例算全景，否则远景
 
 # 构图：主体中心离三分线 / 中线多近才算落在线上
@@ -39,8 +39,8 @@ LEVEL_OK = 1.5
 LEVEL_DUTCH = 5.0
 
 # 景深：主体区域与背景区域清晰度之比
-DEPTH_SHALLOW = 2.5
-DEPTH_DEEP = 1.5
+DEPTH_SHALLOW = 1.4  # 按"锐度 / 局部反差"比较，按真实 MV 画面校准
+DEPTH_DEEP = 1.1
 DEPTH_DARK = 28  # 平均亮度（0～255）低于此值的区域不参与景深比较
 BLURRY = 4.0  # 最清晰的几块（拉普拉斯均值的 98% 分位）也低于此值时，算整体偏糊
 
@@ -145,10 +145,11 @@ def find_people(bgr):
     return found
 
 
-def detect(bgr):
-    """人脸与人体；模型文件缺失或无法加载时返回 None，其余分析照常进行。"""
+def detect(bgr, detail=None):
+    """人脸与人体；模型文件缺失或无法加载时返回 None，其余分析照常进行。
+    `detail` 是同一画面更清楚的版本，用来找人脸（坐标都是 0～1 比例，可以直接混用）。"""
     try:
-        faces = find_faces(bgr) if FACE_MODEL.is_file() else None
+        faces = find_faces(bgr if detail is None else detail) if FACE_MODEL.is_file() else None
         people = find_people(bgr) if PERSON_MODEL.is_file() else None
     except cv2.error:
         return None
@@ -439,6 +440,17 @@ def depth_of_field(gray, main):
             for r in range(rows)
         ]
     )
+    # 边缘锐度相对于局部反差：虚化的霓虹、光斑反差很大但边缘发软，按绝对锐度会被当成"清晰"
+    contrast = np.array(
+        [
+            [
+                float(gray[h * r // rows : h * (r + 1) // rows, w * c // cols : w * (c + 1) // cols].std())
+                for c in range(cols)
+            ]
+            for r in range(rows)
+        ]
+    )
+    crisp = blocks / (contrast + 4.0)
     overall = float(np.percentile(blocks, 98))  # 最清晰的几块：大片天空、白墙不会被当成偏糊
     if overall < BLURRY:
         return {'label': '整体偏糊', 'ratio': None, 'basis': '全画面都缺少清晰细节（可能是运动模糊、失焦或刻意的柔焦）'}
@@ -461,7 +473,7 @@ def depth_of_field(gray, main):
         return {'label': '无法判断', 'ratio': None, 'basis': '主体占满画面，看不到背景'}
     if (~inside & lit).sum() < 12:
         return {'label': '无法判断', 'ratio': None, 'basis': '背景太暗，无法比较清晰度'}
-    ratio = float(np.percentile(blocks[inside & lit], 75) / max(np.median(blocks[~inside & lit]), 0.5))
+    ratio = float(np.percentile(crisp[inside & lit], 75) / max(np.median(crisp[~inside & lit]), 0.01))
     if ratio >= DEPTH_SHALLOW:
         label, basis = '浅景深', '主体清晰、背景明显柔和：多为背景虚化（背景本身平整时也会这样）'
     elif ratio <= DEPTH_DEEP:
@@ -471,10 +483,10 @@ def depth_of_field(gray, main):
     return {'label': label, 'ratio': round(ratio, 2), 'basis': basis}
 
 
-def analyze(content):
-    """一张已去掉黑边、长边不超过分析尺寸的 BGR 图。"""
+def analyze(content, detail=None):
+    """一张已去掉黑边、长边不超过分析尺寸的 BGR 图；`detail` 是同一画面更清楚的版本（可选）。"""
     gray = cv2.cvtColor(content, cv2.COLOR_BGR2GRAY)
-    found = detect(content)
+    found = detect(content, detail)
     main = subject(found, content)
     return {
         'people': found,
