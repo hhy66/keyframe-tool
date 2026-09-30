@@ -546,14 +546,23 @@ def render(plan, sources, payload, path, preview):
         final.convert('RGB').save(preview, format='JPEG', quality=90)
 
 
-def storyboard_csv(payload, cuts):
-    """A spreadsheet-friendly shot list for the selected photos, in collage order (UTF-8 with BOM for Excel)."""
+def _clock(seconds):
+    minutes, rest = divmod(max(0.0, seconds), 60)
+    hours, minutes = divmod(int(minutes), 60)
+    return f'{hours:02d}:{minutes:02d}:{rest:06.3f}'
+
+
+def storyboard_csv(payload, cuts, spans=None):
+    """A spreadsheet-friendly shot list for the selected photos, in collage order (UTF-8 with BOM for Excel).
+    `spans` (shots.spans) adds each shot's start, end and length."""
     ids = payload.get('ids', [])
     notes = payload.get('notes', {})
     crops = payload.get('crops', {})
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(['顺序', '原截图编号', '时间码', '帧编号', '备注', '裁剪'])
+    writer.writerow(
+        ['顺序', '原截图编号', '时间码', '帧编号', '镜头开始', '镜头结束', '镜头时长（秒）', '备注', '裁剪']
+    )
     for n, i in enumerate(ids, 1):
         cut = cuts[i]
         crop = crops.get(str(i))
@@ -565,5 +574,9 @@ def storyboard_csv(payload, cuts):
         note = notes.get(str(i), '').strip()
         if note[:1] in ('=', '+', '-', '@'):
             note = "'" + note  # keep spreadsheets from treating a note as a formula
-        writer.writerow([n, f'#{i + 1:03d}', cut.get('label', ''), cut.get('frame_index', ''), note, crop_text])
+        span = spans[i] if spans else None
+        timing = [_clock(span['start']), _clock(span['end']), f"{span['duration']:.2f}"] if span else ['', '', '']
+        writer.writerow(
+            [n, f'#{i + 1:03d}', cut.get('label', ''), cut.get('frame_index', ''), *timing, note, crop_text]
+        )
     return '\ufeff' + out.getvalue()

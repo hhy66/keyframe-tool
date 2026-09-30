@@ -347,6 +347,7 @@
         <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>上一张 / 下一张；<kbd>Home</kbd> <kbd>End</kbd> 跳到首尾</td></tr>
         <tr><td><kbd>空格</kbd></td><td>切换保留 / 跳过，停在当前这张</td></tr>
         <tr><td><kbd>A</kbd> · <kbd>G</kbd></td><td>显示 / 隐藏画面分析 · 构图辅助线</td></tr>
+        <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> · <kbd>0</kbd></td><td>看这个镜头的首帧 / 中间帧 / 尾帧 · 回到关键帧</td></tr>
         <tr><td><kbd>E</kbd> · <kbd>D</kbd> · <kbd>Esc</kbd></td><td>逐帧微调 · 下载原图 · 回到网格</td></tr>
         <tr><th colspan="2">结果网格</th></tr>
         <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>移动当前卡片（蓝框）</td></tr>
@@ -398,6 +399,7 @@
       <img id="vwImg" alt="">
       <svg id="vwGuides" class="vwGuides" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true" hidden></svg>
       <span id="vwState" class="vwState"></span>
+      <span id="vwFrameTag" class="vwFrameTag" hidden></span>
     </figure>
     <button type="button" class="vwNav next" id="vwNext" aria-label="下一张（→）">›</button>
   </div>
@@ -408,7 +410,7 @@
       <button type="button" class="vwChoice keep" id="vwKeep" aria-pressed="true"><kbd>↑</kbd> 保留并下一张</button>
     </div>
     <div class="vwStrip" id="vwStrip" aria-label="全部截图"></div>
-    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · A 画面分析 · G 辅助线 · E 微调 · D 下载 · Esc 关闭</div>
+    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · 1 / 2 / 3 首 · 中 · 尾帧 · A 画面分析 · G 辅助线 · E 微调 · D 下载 · Esc 关闭</div>
   </div>
 </div>
 
