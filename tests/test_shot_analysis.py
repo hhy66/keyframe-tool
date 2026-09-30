@@ -135,3 +135,72 @@ class TagTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CalibrationRoundOneTests(unittest.TestCase):
+    """Cases found on real music-video frames: a dark casino room with two people."""
+
+    def test_dark_vignette_is_not_a_letterbox(self):
+        image = textured()
+        # Edges fade to near-black with texture left in them, as in a dark room shot.
+        fade = np.minimum.outer(
+            np.minimum(np.arange(720), np.arange(720)[::-1]), np.minimum(np.arange(1280), np.arange(1280)[::-1])
+        )
+        weight = np.clip(fade / 140.0, 0.04, 1.0)[..., None]
+        dark = (image.astype(np.float32) * weight * 0.35).astype(np.uint8)
+        self.assertFalse(fa.analyze(dark)['frame']['letterbox'])
+
+    def test_pillarbox_in_video_black_with_noise(self):
+        image = np.full((1080, 1920, 3), 16, np.uint8)
+        image[:, 240:1680] = textured((1080, 1440))
+        noise = np.random.default_rng(0).integers(-2, 3, image.shape)
+        image = np.clip(image.astype(int) + noise, 0, 255).astype(np.uint8)
+        frame = fa.analyze(image)['frame']
+        self.assertEqual(frame['aspect'], '4:3')
+        self.assertGreater(frame['bars']['left'], 200)
+
+    def two_people(self, xs, sizes):
+        image = canvas((60, 70, 80), (1080, 1920))
+        for x, size in zip(xs, sizes):
+            image[900 - size : 900, x : x + size] = cv2.resize(ASTRONAUT, (size, size))
+        return fa.analyze(image)
+
+    def test_two_people_on_either_side_are_balanced(self):
+        result = self.two_people([250, 1370], [300, 300])
+        self.assertEqual(result['subject']['source'], '多人')
+        self.assertEqual(result['composition']['label'], '左右平衡构图')
+        self.assertEqual(result['composition']['space'], '')
+        self.assertIn('两侧', result['composition']['basis'])
+
+    def test_centre_person_with_people_either_side(self):
+        result = self.two_people([150, 810, 1470], [300, 300, 300])
+        self.assertEqual(result['composition']['label'], '对称构图')
+        self.assertTrue(result['composition']['position'].startswith('3 人'))
+
+    def test_dark_background_is_not_called_shallow(self):
+        image = canvas((12, 12, 12))
+        image[180:540, 480:800] = textured((360, 320), seed=3)
+        depth = fa.analyze(image)['depth']
+        self.assertNotEqual(depth['label'], '浅景深')
+
+    def test_low_key_with_a_lamp_is_high_contrast(self):
+        image = (textured() * 0.25).astype(np.uint8)
+        cv2.circle(image, (640, 120), 40, (250, 250, 250), -1)
+        tone = fa.analyze(image)['tone']
+        self.assertEqual((tone['key'], tone['contrast']), ('低调', '高对比'))
+        self.assertIn('强光', tone['note'])
+
+    def test_small_green_table_in_a_brown_room_is_an_accent(self):
+        image = canvas((40, 60, 95))  # warm brown
+        image[500:580, 500:780] = (80, 105, 45)  # dark green, about 2.4% of the frame
+        accent = fa.analyze(image)['color']['accent']
+        self.assertIsNotNone(accent)
+        self.assertEqual(accent['name'][-1], '绿')
+
+    def test_colour_names_follow_lab_hues(self):
+        def name(rgb):
+            return fa.analyze(canvas(rgb[::-1]))['color']['palette'][0]['name']
+
+        self.assertEqual(name((40, 80, 230)), '蓝')
+        self.assertEqual(name((230, 40, 40)), '红')
+        self.assertEqual(name((40, 180, 70)), '绿')

@@ -13,13 +13,14 @@ import numpy as np
 
 import shot_analysis
 
-ANALYSIS_VERSION = 2  # 算法或阈值改变时加一，旧缓存会自动重算
+ANALYSIS_VERSION = 3  # 算法或阈值改变时加一，旧缓存会自动重算
 WORK_SIZE = 640  # 分析用图的最长边
 PALETTE_SIZE = 160  # 主色聚类用图的最长边
 
 # 画幅：黑边行的亮度上限（取该行 90% 分位，零星字幕不影响）；黑边最多占一侧的比例
 BAR_LEVEL = 24
 BAR_MAX_SHARE = 0.3
+BAR_FLAT = 2.0  # 黑边内部亮度起伏（四分位差）的上限；暗角通常在 4 以上
 ASPECTS = [
     ('9:16', 9 / 16),
     ('3:4', 3 / 4),
@@ -45,6 +46,11 @@ CONTRAST_LOW = 0.45  # 5%～95% 分位亮度差
 CONTRAST_HIGH = 0.78
 CLIP_SHARE = 0.02  # 过曝 / 欠曝像素占比达到此值才提示
 LIGHT_SHIFT = 0.1  # 画面两侧平均亮度差
+GLARE_LEVEL = 0.85  # 低调画面里，亮度高于此值的像素算强光
+GLARE_SHARE = 0.004  # 强光占画面 0.4% 以上时，算作局部强光
+ACCENT_CHROMA = 15  # 点缀色：足够鲜艳（Lab 色度）
+ACCENT_SHARE = 0.01  # 至少占画面 1%
+ACCENT_GAP = 90  # 与主色调色相至少相差 90°
 
 
 # ---------------------------------------------------------------- 画幅与黑边
@@ -60,14 +66,27 @@ def _bar(lines):
     return count
 
 
+def _flat_black(region):
+    """一块边缘区域是不是真正的黑边：几乎纯黑、每行（列）内部均匀、各行（列）亮度一致。
+    暗角、暗场景的边缘虽然也很暗，但内部有明暗起伏，不算黑边。字幕只占少数像素，不影响四分位。"""
+    if not region.size:
+        return False
+    spread = np.percentile(region, 75, axis=1) - np.percentile(region, 25, axis=1)
+    level = np.percentile(region, 50, axis=1)
+    return bool(
+        np.median(spread) <= BAR_FLAT and level.max() <= BAR_LEVEL and level.max() - level.min() <= BAR_FLAT * 2
+    )
+
+
 def find_bars(gray):
-    """上下（遮幅）或左右（柱状）黑边的像素数。只有两侧都有且宽度接近时才算黑边，避免把夜景误判。
-    黑边里压了字幕时，那几行只要多数像素仍是黑的，也算黑边。"""
+    """上下（遮幅）或左右（柱状）黑边的像素数。只有两侧都有、宽度接近、而且是均匀纯黑时才算黑边，
+    避免把夜景、暗角误判。黑边里压了字幕时，那几行只要多数像素仍是黑的，也算黑边。"""
     h, w = gray.shape
     bars = {'top': 0, 'bottom': 0, 'left': 0, 'right': 0}
     for first, second, axis, size in (('top', 'bottom', 1, h), ('left', 'right', 0, w)):
-        strict = np.percentile(gray, 90, axis=axis)
-        loose = np.percentile(gray, 50, axis=axis)
+        lines = gray if axis == 1 else gray.T  # 每一行是一条从画面一侧到另一侧的线
+        strict = np.percentile(lines, 90, axis=1)
+        loose = np.percentile(lines, 50, axis=1)
         a, b = _bar(strict), _bar(strict[::-1])
         if a >= size or not a or not b:
             continue  # 全黑画面或只有一侧暗
@@ -77,6 +96,8 @@ def find_bars(gray):
         if a > size * BAR_MAX_SHARE or b > size * BAR_MAX_SHARE:
             continue
         if abs(a - b) > max(4, 0.25 * widest):
+            continue
+        if not (_flat_black(lines[:a]) and _flat_black(lines[::-1][:b])):
             continue
         bars[first], bars[second] = a, b
     return bars
@@ -109,16 +130,17 @@ def _hue_name(hue, lightness, chroma):
             if lightness < 88
             else '白'
         )
+    # Lab 色相角：纯红约 40°、黄约 100°、绿约 135°、青约 196°、纯蓝约 306°、品红约 328°、粉约 350°
     names = [
-        (15, '品红'),
-        (45, '红'),
-        (75, '橙'),
-        (105, '黄'),
-        (135, '黄绿'),
-        (175, '绿'),
+        (20, '品红'),
+        (50, '红'),
+        (85, '橙'),
+        (110, '黄'),
+        (130, '黄绿'),
+        (170, '绿'),
         (235, '青'),
-        (300, '蓝'),
-        (335, '紫'),
+        (315, '蓝'),
+        (340, '紫'),
         (360, '品红'),
     ]
     name = next(label for limit, label in names if hue < limit)
@@ -228,6 +250,37 @@ def _hue_gap(a, b):
     return min(gap, 360 - gap)
 
 
+def accent(lab, colors):
+    """点缀色：面积小、但鲜艳且与主色调反差大的颜色（比如暖棕房间里的绿色牌桌）。主色卡里已有的不算。"""
+    a, b = lab[..., 1].ravel(), lab[..., 2].ravel()
+    chroma = np.hypot(a, b)
+    vivid = chroma >= ACCENT_CHROMA
+    if vivid.mean() < ACCENT_SHARE:
+        return None
+    hue = np.degrees(np.arctan2(b[vivid], a[vivid])) % 360
+    bins = np.bincount((hue // 30).astype(int) % 12, weights=chroma[vivid], minlength=12)
+    main = (int(np.argmax(bins)) + 0.5) * 30
+    counts = np.bincount((hue // 30).astype(int) % 12, minlength=12) / chroma.size
+    for index in np.argsort(-counts):
+        centre = (index + 0.5) * 30
+        if counts[index] < ACCENT_SHARE:
+            break
+        if _hue_gap(centre, main) < ACCENT_GAP:
+            continue
+        if any(c['chroma'] >= 15 and _hue_gap(c['hue'], centre) < 30 and c['share'] >= 0.08 for c in colors):
+            continue  # 已经是主色之一
+        picked = (hue // 30).astype(int) % 12 == index
+        pixels = lab.reshape(-1, 3)[vivid][picked]
+        center = pixels.mean(axis=0)
+        lightness, ca, cb = (float(v) for v in center)
+        return {
+            'name': _hue_name(math.degrees(math.atan2(cb, ca)) % 360, lightness, math.hypot(ca, cb)),
+            'hex': _hex(center),
+            'share': round(float(counts[index]), 3),
+        }
+    return None
+
+
 def harmony(colors):
     """主色之间的色相关系。只看占比不少于 8% 的有彩色。"""
     vivid = [c for c in colors if c['chroma'] >= 15 and c['share'] >= 0.08]
@@ -262,9 +315,16 @@ def tone(lightness):
     histogram = np.histogram(values, bins=32, range=(0.0, 1.0))[0] / len(values)
     key = '低调' if mean < KEY_LOW else '高调' if mean > KEY_HIGH else '中间调'
     contrast = '高对比' if spread > CONTRAST_HIGH else '低对比' if spread < CONTRAST_LOW else '中等对比'
+    note = ''
+    # 暗部为主、只有灯具或窗户很亮：面积小，拉不开分位差，但摄影上属于"低调高反差"
+    glare = float((values > GLARE_LEVEL).mean())
+    if key == '低调' and contrast != '高对比' and glare >= GLARE_SHARE:
+        contrast = '高对比'
+        note = '暗部为主，有小面积强光（如灯具、窗户）'
     return {
         'key': key,
         'contrast': contrast,
+        'note': note,
         'brightness': round(mean, 3),
         'spread': round(spread, 3),
         'highlights': round(float((values > 0.98).mean()), 3),
@@ -362,6 +422,7 @@ def analyze(bgr):
             'temperature': temperature(lab),
             'saturation': saturation(lab),
             'harmony': harmony(colors),
+            'accent': accent(lab, colors),
         },
         'tone': tone(lightness),
         'light': light_layout(lightness),

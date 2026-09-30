@@ -25,9 +25,13 @@ function analysisRows(item) {
       ['冷暖', [color.temperature.label, color.temperature.note].filter(Boolean).join('，')],
       ['饱和度', color.saturation.label],
       ['色彩关系', [color.harmony.label, color.harmony.note].filter(Boolean).join('：')],
+      ...(color.accent
+        ? [['点缀色', `${color.accent.name} ${color.accent.hex.toUpperCase()}，约占 ${percent(color.accent.share)}`]]
+        : []),
     ],
     tone: [
       ['类型', `${tone.key} · ${tone.contrast}`],
+      ...(tone.note ? [['说明', tone.note]] : []),
       ['平均亮度', percent(tone.brightness)],
       ...(clipped.length ? [['细节损失', clipped.join('，')]] : []),
     ],
