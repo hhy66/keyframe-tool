@@ -1,0 +1,176 @@
+/* Picture analysis: a colour strip and tags on each result card, and a panel beside the picture in
+   the full-screen viewer. */
+#btnAnalyze.done {
+  color: var(--ok);
+  background: #fff;
+  border-color: #bbf7d0;
+  opacity: 1;
+}
+
+.anaRow {
+  padding: 6px 8px 7px;
+  border-top: 1px solid var(--line);
+  background: #fff;
+}
+.anaStrip {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+.anaStrip span,
+.anaBigStrip span {
+  flex-basis: 0;
+  min-width: 3px;
+}
+.anaTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.anaTag {
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #f1f2f8;
+  color: #4b5563;
+  white-space: nowrap;
+}
+
+/* Viewer: the panel sits to the right of the picture. */
+.viewer {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'top top' 'stage panel' 'bottom bottom';
+}
+.vwTop {
+  grid-area: top;
+}
+.vwStage {
+  grid-area: stage;
+}
+.vwBottom {
+  grid-area: bottom;
+}
+.vwPanel {
+  grid-area: panel;
+  width: 300px;
+  min-height: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 14px 18px 18px;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  background: #101218;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+.vwPanel h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+.vwPanel section {
+  padding: 10px 0 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.vwPanel h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #9aa0ad;
+}
+.vwPanel dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 12px;
+  margin: 8px 0 0;
+}
+.vwPanel dt {
+  color: #7b8190;
+}
+.vwPanel dd {
+  margin: 0;
+  color: #e5e7eb;
+}
+.anaEmpty,
+.anaFoot {
+  color: #9aa0ad;
+  line-height: 1.7;
+}
+.anaFoot {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: #6b7180;
+}
+.anaBigStrip {
+  display: flex;
+  height: 22px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.anaColours {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.anaColours li {
+  display: grid;
+  grid-template-columns: 14px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+}
+.anaColours i {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+.anaColours code {
+  font-size: 11.5px;
+  color: #9aa0ad;
+}
+.anaColours b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
+}
+.anaHistogram {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 48px;
+  padding: 4px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.08));
+}
+.anaHistogram span {
+  flex: 1;
+  background: #c7cbd6;
+  border-radius: 1px 1px 0 0;
+}
+.anaLightGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  width: 96px;
+  aspect-ratio: 16 / 9;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+@media (max-width: 760px) {
+  .viewer {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'top' 'stage' 'bottom';
+  }
+  .vwPanel {
+    display: none;
+  }
+}
