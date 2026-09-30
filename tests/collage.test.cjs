@@ -19,10 +19,12 @@ function boot(handler){
 }
 const settle=()=>new Promise(r=>setImmediate(r));
 
-test('independent selection starts in unscaled original mode',()=>{
+test('independent selection starts in justified share mode with the card preset',()=>{
   const a=boot();a.run('CollageUI.open();CollageUI.toggle(1);CollageUI.toggle(0)');
   assert.deepEqual([...a.state.sel],[2,0]);assert.equal(a.run('CollageUI.ids.join(",")'),'2,1');
-  assert.equal(a.$('#collageMode').value,'original');assert.equal(a.$('#collageWidth').disabled,true);
+  assert.equal(a.$('#collageMode').value,'share');assert.equal(a.$('#collageLayout').value,'justified');
+  assert.equal(a.$('#collageWidth').disabled,true);assert.equal(a.$('#collageGap').value,'medium');assert.equal(a.$('#collageShadow').checked,true);
+  assert.equal(a.$('#collageCanvasField').hidden,false);assert.equal(a.$('#collageFitField').hidden,true);
 });
 test('overflow never silently discards photos and partial page never duplicates',()=>{
   const a=boot();assert.throws(()=>a.run('CollageUI.pages([0,1,2,3,4],2,false)'),/超过/);
@@ -38,9 +40,11 @@ test('dimensions and memory limit come from the authoritative server plan',async
 });
 test('original payload disables crop and additional labels without reducing source size',()=>{
   const a=boot();a.run('CollageUI.open();CollageUI.crops={0:{x:.1,y:.1,width:.8,height:.8}}');
+  a.$('#collageMode').value='original';a.$('#collageTitleText').value='标题';
   a.$('#collageIndex').checked=true;a.$('#collageTime').checked=true;
   const p=a.run('CollageUI.payload()');assert.equal(p.mode,'original');assert.equal(p.shape,'source');assert.equal(p.index,false);
   assert.equal(JSON.stringify(p.crops),'{}');assert.equal(JSON.stringify(p.ids),'[0,2]');
+  assert.equal(p.layout,'grid');assert.equal(p.gap,'none');assert.equal(p.radius,'none');assert.equal(p.shadow,false);assert.equal(p.title,'');
 });
 test('final preview and download refer to server rendered files, not a browser export',async()=>{
   const a=boot();a.run('CollageUI.open()');await a.run('CollageUI.generate()');
@@ -65,7 +69,7 @@ test('obsolete render response is cleaned rather than replacing current state',a
 });
 test('multi-page request sends only the final page photo and correct page number',async()=>{
   const a=boot();a.state.cuts=Array.from({length:9},(_,i)=>({label:`t${i}`}));a.state.frames=Array(9).fill('frame');a.state.thumbs=Array(9).fill('thumb');a.state.sel=new Set([0,1,2,3,4,5,6,7,8]);
-  a.run('CollageUI.open()');a.$('#collageSplit').checked=true;a.run('CollageUI.page=2');await a.run('CollageUI.generate()');
+  a.run('CollageUI.open()');a.$('#collageGrid').value='2';a.$('#collageSplit').checked=true;a.run('CollageUI.page=2');await a.run('CollageUI.generate()');
   const call=a.calls.find(c=>c.url.endsWith('/render'));const data=JSON.parse(call.options.body);
   assert.deepEqual(data.ids,[8]);assert.equal(data.page,3);assert.equal(a.state.sel.size,9);
 });
@@ -73,4 +77,35 @@ test('crop state stays attached to source id when images are reordered',()=>{
   const a=boot();a.run('CollageUI.open()');a.$('#collageMode').value='custom';a.$('#collageShape').value='square';a.$('#collageFit').value='cover';
   a.run('CollageUI.setCrop(0,{x:.25,y:0,width:.5,height:1});CollageUI.swap(0,2)');
   const data=a.run('CollageUI.payload()');assert.equal(data.crops['0'].x,.25);assert.equal(JSON.stringify(data.ids),'[2,0]');
+});
+test('style presets fill the controls and manual changes switch to custom',()=>{
+  const a=boot();a.run('CollageUI.open()');
+  a.$('#collagePreset').value='gallery';a.run("CollageUI.settingChanged('#collagePreset')");
+  assert.equal(a.$('#collageBackground').value,'dark');assert.equal(a.$('#collageShadow').checked,false);
+  a.$('#collageGap').value='large';a.run("CollageUI.settingChanged('#collageGap')");
+  assert.equal(a.$('#collagePreset').value,'custom');
+  a.$('#collageTitleText').value='  镜头参考  ';
+  const p=a.run('CollageUI.payload()');
+  assert.equal(p.gap,'large');assert.equal(p.radius,'small');assert.equal(p.background,'dark');assert.equal(p.title,'镜头参考');assert.equal(p.canvas,'auto');
+});
+test('cropper result is normalised to the source and a full frame clears the crop',async()=>{
+  const a=boot();a.run('CollageUI.open()');a.$('#cropImage').decode=async()=>{};
+  a.context.Cropper=class{constructor(img,options){this.options=options;a.context.lastCropper=this;}
+    getImageData(){return {naturalWidth:200,naturalHeight:100};}getData(){return this.data;}setData(){}destroy(){this.destroyed=true;}};
+  await a.run('CollageUI.openCrop(0)');
+  assert.equal(a.$('#cropDialog').hidden,false);assert.ok(Number.isNaN(a.run('lastCropper.options.aspectRatio')));
+  a.run('lastCropper.data={x:50,y:10,width:100,height:80};CollageUI.applyCrop()');
+  assert.equal(JSON.stringify(a.run('CollageUI.crops[0]')),JSON.stringify({x:.25,y:.1,width:.5,height:.8}));
+  assert.equal(a.$('#cropDialog').hidden,true);assert.equal(a.run('lastCropper.destroyed'),true);
+  await a.run('CollageUI.openCrop(0)');a.run('lastCropper.data={x:0,y:0,width:200,height:100};CollageUI.applyCrop()');
+  assert.equal(a.run('CollageUI.crops[0]'),undefined);
+});
+test('grid cover locks the cropper to the cell ratio; original mode refuses to crop',async()=>{
+  const a=boot();a.run('CollageUI.open()');a.$('#cropImage').decode=async()=>{};a.context.lastOptions=null;
+  a.context.Cropper=class{constructor(img,options){a.context.lastOptions=options;}destroy(){}};
+  a.$('#collageLayout').value='grid';a.$('#collageFit').value='cover';
+  a.run("CollageUI.plan={items:[{id:0,cell:{width:300,height:200}}]}");
+  await a.run('CollageUI.openCrop(0)');assert.equal(a.run('lastOptions.aspectRatio'),1.5);
+  a.run('CollageUI.closeCrop();lastOptions=null');a.$('#collageMode').value='original';
+  await a.run('CollageUI.openCrop(0)');assert.equal(a.run('lastOptions'),null);assert.equal(a.$('#cropDialog').hidden,true);
 });

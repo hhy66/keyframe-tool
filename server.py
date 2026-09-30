@@ -966,7 +966,8 @@ def render_collage(sid: str, payload: dict):
     try:
         collage_engine.render(plan,sources,payload,path,preview)
         video_name=re_safe(Path(_session(sid).get('video_name','video')).stem or 'video')
-        filename=f"参考拼图_{video_name}_{payload.get('grid',3)}x{payload.get('grid',3)}_{payload.get('page',1):02d}.{ext}"
+        layout='智能排版' if plan['layout']=='justified' else f"{payload.get('grid',3)}x{payload.get('grid',3)}"
+        filename=f"参考拼图_{video_name}_{layout}_{payload.get('page',1):02d}.{ext}"
         workspace_store.atomic_json(metadata,dict(token=token,format=fmt,filename=filename,run=payload['run'],created_at=time.time(),width=plan['width'],height=plan['height']))
     except Exception as exc:
         for p in (path,preview,metadata):p.unlink(missing_ok=True)
