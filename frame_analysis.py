@@ -1,4 +1,5 @@
-"""画面分析：从一张关键帧测出画幅、色彩、影调与明暗分布。纯计算，不涉及 HTTP 和工作区。
+"""画面分析：从一张关键帧测出画幅、色彩、影调、明暗分布，以及景别、构图、水平与景深（shot_analysis.py）。
+纯计算，不涉及 HTTP 和工作区。
 
 所有结果都是可复现的测量值：同一张图每次得到同样的结果。阈值集中在本文件顶部，便于用真实镜头校准。
 """
@@ -10,7 +11,9 @@ import math
 import cv2
 import numpy as np
 
-ANALYSIS_VERSION = 1  # 算法或阈值改变时加一，旧缓存会自动重算
+import shot_analysis
+
+ANALYSIS_VERSION = 2  # 算法或阈值改变时加一，旧缓存会自动重算
 WORK_SIZE = 640  # 分析用图的最长边
 PALETTE_SIZE = 160  # 主色聚类用图的最长边
 
@@ -301,20 +304,23 @@ def light_layout(lightness):
 
 
 def tags(result):
-    """卡片上显示的精简标签，最多 4 个，只放有信息量的。"""
-    out = []
+    """卡片上显示的精简标签，最多 4 个，按拍法优先：景别、构图，再是画幅、冷暖、影调。"""
     frame = result['frame']
+    aspect = ''
     if frame['letterbox'] or frame['aspect'] not in ('16:9', '9:16'):
-        out.append(('宽银幕 ' if frame['content_ratio'] >= 2.2 else '') + frame['aspect'])
+        aspect = ('宽银幕 ' if frame['content_ratio'] >= 2.2 else '') + frame['aspect']
     elif frame['orientation'] == '竖屏':
-        out.append('竖屏')
-    out.append(result['color']['temperature']['label'])
-    out.append(result['tone']['key'])
-    if result['tone']['contrast'] != '中等对比':
-        out.append(result['tone']['contrast'])
-    elif result['color']['harmony']['label'] in ('青橙对比', '互补色对比'):
-        out.append(result['color']['harmony']['label'])
-    return out[:4]
+        aspect = '竖屏'
+    tone = result['tone']
+    candidates = [
+        result['shot']['label'],
+        result['composition']['label'],
+        aspect,
+        result['color']['temperature']['label'],
+        tone['key'],
+        tone['contrast'] if tone['contrast'] != '中等对比' else '',
+    ]
+    return [text for text in candidates if text][:4]
 
 
 def analyze(bgr):
@@ -343,6 +349,13 @@ def analyze(bgr):
             'orientation': orientation(content_ratio),
             'letterbox': any(bars.values()),
             'bars': {side: round(value / scale) for side, value in bars.items()},
+            # 画面内容在整张图里的位置（0～1），前端据此把辅助线画在黑边以内
+            'content': [
+                round(bars['left'] / w, 4),
+                round(bars['top'] / h, 4),
+                round(content.shape[1] / w, 4),
+                round(content.shape[0] / h, 4),
+            ],
         },
         'color': {
             'palette': colors,
@@ -352,6 +365,7 @@ def analyze(bgr):
         },
         'tone': tone(lightness),
         'light': light_layout(lightness),
+        **shot_analysis.analyze(content),
     }
     result['tags'] = tags(result)
     return result

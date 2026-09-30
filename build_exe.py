@@ -57,6 +57,8 @@ def main():
         str(ROOT / 'build'),
         '--add-data',
         f"{ROOT / 'static'}{os.pathsep}static",
+        '--add-data',
+        f"{ROOT / 'models'}{os.pathsep}models",
         '--collect-submodules',
         'uvicorn',
     ]

@@ -346,7 +346,8 @@
         <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>保留 / 跳过，并自动进入下一张</td></tr>
         <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>上一张 / 下一张；<kbd>Home</kbd> <kbd>End</kbd> 跳到首尾</td></tr>
         <tr><td><kbd>空格</kbd></td><td>切换保留 / 跳过，停在当前这张</td></tr>
-        <tr><td><kbd>A</kbd> · <kbd>E</kbd> · <kbd>D</kbd> · <kbd>Esc</kbd></td><td>显示 / 隐藏画面分析 · 逐帧微调 · 下载原图 · 回到网格</td></tr>
+        <tr><td><kbd>A</kbd> · <kbd>G</kbd></td><td>显示 / 隐藏画面分析 · 构图辅助线</td></tr>
+        <tr><td><kbd>E</kbd> · <kbd>D</kbd> · <kbd>Esc</kbd></td><td>逐帧微调 · 下载原图 · 回到网格</td></tr>
         <tr><th colspan="2">结果网格</th></tr>
         <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>移动当前卡片（蓝框）</td></tr>
         <tr><td><kbd>空格</kbd> 或 <kbd>X</kbd></td><td>保留 / 跳过当前卡片</td></tr>
@@ -385,6 +386,7 @@
     <div class="vwTools">
       <span id="vwStats" class="vwStats"></span>
       <a id="vwDownload" class="vwBtn" title="下载这张原图（D）">下载原图</a>
+      <button type="button" id="vwGuideBtn" class="vwBtn" aria-pressed="false" title="构图辅助线：三分线、人物框、主体位置（G）">辅助线</button>
       <button type="button" id="vwInfo" class="vwBtn" aria-pressed="true" aria-controls="vwAnalysis" title="显示 / 隐藏画面分析（A）">画面分析</button>
       <button type="button" id="vwEdit" class="vwBtn" title="关闭大图，逐帧微调这张（E）">逐帧微调</button>
       <button type="button" id="lbClose" class="vwBtn" title="回到网格（Esc）">关闭</button>
@@ -394,6 +396,7 @@
     <button type="button" class="vwNav prev" id="vwPrev" aria-label="上一张（←）">‹</button>
     <figure class="vwFigure">
       <img id="vwImg" alt="">
+      <svg id="vwGuides" class="vwGuides" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true" hidden></svg>
       <span id="vwState" class="vwState"></span>
     </figure>
     <button type="button" class="vwNav next" id="vwNext" aria-label="下一张（→）">›</button>
@@ -405,7 +408,7 @@
       <button type="button" class="vwChoice keep" id="vwKeep" aria-pressed="true"><kbd>↑</kbd> 保留并下一张</button>
     </div>
     <div class="vwStrip" id="vwStrip" aria-label="全部截图"></div>
-    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · A 画面分析 · E 微调 · D 下载 · Esc 关闭</div>
+    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · A 画面分析 · G 辅助线 · E 微调 · D 下载 · Esc 关闭</div>
   </div>
 </div>
 

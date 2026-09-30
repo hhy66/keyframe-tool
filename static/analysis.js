@@ -2,6 +2,7 @@
    button, then tags on the result cards and a panel in the full-screen viewer.
    Uses `state`, `jsonRequest` and `toast` from app.js. */
 const ANALYSIS_PANEL_KEY = 'keyframe-tool.viewer.analysis';
+const ANALYSIS_GUIDES_KEY = 'keyframe-tool.viewer.guides';
 
 // Text rows of the viewer panel for one analysed picture. Pure, so it can be tested on its own.
 function analysisRows(item) {
@@ -31,6 +32,22 @@ function analysisRows(item) {
       ...(clipped.length ? [['细节损失', clipped.join('，')]] : []),
     ],
     light: [['结论', item.light.label]],
+    shot: [
+      ['景别', item.shot.label || '无法判断'],
+      ...(item.shot.people > 1 ? [['人数', `约 ${item.shot.people} 人`]] : []),
+      ['依据', item.shot.basis],
+    ],
+    composition: [
+      ['构图', item.composition.label || '无明显主体'],
+      ['主体位置', item.composition.position],
+      ['留白', item.composition.space],
+      ['依据', item.composition.basis],
+    ].filter(([, value]) => value),
+    lens: [
+      ['水平', item.level.label],
+      ['景深', item.depth.label],
+      ['说明', item.depth.basis],
+    ],
   };
 }
 
@@ -50,6 +67,13 @@ const Analysis = {
       return localStorage.getItem(ANALYSIS_PANEL_KEY) !== '0';
     } catch {
       return true;
+    }
+  },
+  guidesOn() {
+    try {
+      return localStorage.getItem(ANALYSIS_GUIDES_KEY) === '1';
+    } catch {
+      return false;
     }
   },
 
@@ -226,7 +250,64 @@ const Analysis = {
     }
   },
 
+  toggleGuides() {
+    try {
+      localStorage.setItem(ANALYSIS_GUIDES_KEY, this.guidesOn() ? '0' : '1');
+    } catch {
+      /* 仅本次有效 */
+    }
+    if (typeof Viewer !== 'undefined' && Viewer.isOpen()) this.paintGuides(Viewer.index);
+  },
+
+  // Rule-of-thirds lines inside the picture (black bars excluded), people, the main subject and the
+  // horizon found by the analysis, drawn over the picture in the viewer.
+  paintGuides(i) {
+    const svg = this.el('#vwGuides');
+    const button = this.el('#vwGuideBtn');
+    if (!svg || i == null) return;
+    const item = this.items[i];
+    const on = this.guidesOn();
+    button.setAttribute('aria-pressed', String(on));
+    button.disabled = !item;
+    // An <svg> has no `hidden` property: toggle the attribute itself.
+    svg.toggleAttribute('hidden', !on || !item);
+    svg.innerHTML = '';
+    if (!on || !item) return;
+    const [cx, cy, cw, ch] = item.frame.content || [0, 0, 1, 1];
+    const X = u => (cx + u * cw) * 1000;
+    const Y = v => (cy + v * ch) * 1000;
+    const add = (tag, attributes) => {
+      const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+      node.setAttribute('vector-effect', 'non-scaling-stroke');
+      svg.appendChild(node);
+      return node;
+    };
+    const line = (x0, y0, x1, y1, className) =>
+      add('line', {x1: X(x0), y1: Y(y0), x2: X(x1), y2: Y(y1), class: className});
+    const box = ([x, y, w, h], className) =>
+      add('rect', {x: X(x), y: Y(y), width: w * cw * 1000, height: h * ch * 1000, class: className});
+    for (const t of [1 / 3, 2 / 3]) {
+      line(t, 0, t, 1, 'gThird');
+      line(0, t, 1, t, 'gThird');
+    }
+    const found = item.people || {faces: [], people: []};
+    found.people.forEach(person => box(person.box, 'gPerson'));
+    found.faces.forEach(face => box(face.box, 'gFace'));
+    if (item.subject && item.subject.source === '显著区域') box(item.subject.box, 'gSalient');
+    if (item.subject) {
+      const [px, py] = item.subject.point;
+      line(px - 0.025, py, px + 0.025, py, 'gPoint');
+      line(px, py - 0.04, px, py + 0.04, 'gPoint');
+    }
+    if (item.level.line) {
+      const [x0, y0, x1, y1] = item.level.line;
+      line(x0, y0, x1, y1, 'gLevel');
+    }
+  },
+
   paintViewer(i) {
+    this.paintGuides(i);
     const panel = this.el('#vwAnalysis');
     const toggle = this.el('#vwInfo');
     if (!panel || i == null) return;
@@ -275,13 +356,17 @@ const Analysis = {
       box.appendChild(list);
       panel.appendChild(box);
     };
+    section('景别', rows.shot);
+    section('构图', rows.composition);
+    section('水平与景深', rows.lens);
     section('画幅', rows.frame);
     section('色彩', rows.color, this.paletteList(item.color.palette));
     section('影调', rows.tone, this.histogram(item.tone.histogram));
     section('明暗分布', rows.light, this.lightGrid(item.light.grid));
     const foot = document.createElement('p');
     foot.className = 'anaFoot';
-    foot.textContent = '以上为本机测量值，不联网。景别、构图等会在后续版本加入。';
+    foot.textContent =
+      '以上为本机测量值，不联网。景别按人脸大小推算，背影或极近的特写可能判断不出；按 G 在画面上显示三分线、人物框和主体位置。';
     panel.appendChild(foot);
   },
 
@@ -341,4 +426,5 @@ const Analysis = {
 if (typeof document !== 'undefined' && document.querySelector('#btnAnalyze')) {
   document.querySelector('#btnAnalyze').addEventListener('click', () => Analysis.start());
   document.querySelector('#vwInfo').addEventListener('click', () => Analysis.togglePanel());
+  document.querySelector('#vwGuideBtn').addEventListener('click', () => Analysis.toggleGuides());
 }

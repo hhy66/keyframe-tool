@@ -19,6 +19,16 @@ const item = {
   },
   tone: {key: '低调', contrast: '高对比', brightness: 0.21, highlights: 0, shadows: 0.05},
   light: {label: '左亮右暗', grid: []},
+  shot: {label: '近景', basis: '主体人脸高度约占画面 25%', people: 2},
+  composition: {
+    label: '三分法构图',
+    position: '水平左三分线 · 垂直上三分线',
+    space: '',
+    symmetry: 0.4,
+    basis: '按人脸位置判断',
+  },
+  level: {label: '水平'},
+  depth: {label: '浅景深', basis: '主体清晰、背景明显柔和'},
 };
 
 test('panel rows describe a letterboxed, low-key frame in plain words', () => {
@@ -29,6 +39,27 @@ test('panel rows describe a letterboxed, low-key frame in plain words', () => {
   assert.deepEqual(rows.tone[1], ['平均亮度', '21%']);
   assert.deepEqual(rows.tone[2], ['细节损失', '欠曝 5%']);
   assert.deepEqual(rows.light, [['结论', '左亮右暗']]);
+  assert.deepEqual(rows.shot, [
+    ['景别', '近景'],
+    ['人数', '约 2 人'],
+    ['依据', '主体人脸高度约占画面 25%'],
+  ]);
+  assert.deepEqual(
+    rows.composition.map(([label]) => label),
+    ['构图', '主体位置', '依据'],
+    'empty rows such as 留白 are left out',
+  );
+  assert.deepEqual(rows.lens[1], ['景深', '浅景深']);
+});
+
+test('no person: the shot size says it cannot tell instead of guessing', () => {
+  const rows = JSON.parse(
+    JSON.stringify(load().analysisRows({...item, shot: {label: '', basis: '未检测到人物', people: 0}})),
+  );
+  assert.deepEqual(rows.shot, [
+    ['景别', '无法判断'],
+    ['依据', '未检测到人物'],
+  ]);
 });
 
 test('no clipping row when nothing is lost', () => {
@@ -38,6 +69,7 @@ test('no clipping row when nothing is lost', () => {
 
 test('the page has the button, the viewer toggle and the panel', () => {
   const html = fs.readFileSync('static/index.html', 'utf8');
-  for (const id of ['btnAnalyze', 'vwInfo', 'vwAnalysis']) assert.match(html, new RegExp(`id="${id}"`), id);
+  for (const id of ['btnAnalyze', 'vwInfo', 'vwAnalysis', 'vwGuideBtn', 'vwGuides'])
+    assert.match(html, new RegExp(`id="${id}"`), id);
   assert.match(html, /<script src="\/analysis\.js"><\/script>/);
 });
