@@ -1,0 +1,281 @@
+/* Full-screen one-by-one review. Dark and quiet, so the picture is the only thing that stands out. */
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: #0b0c10;
+  color: #d7dae3;
+  font-size: 13px;
+}
+.viewer[hidden] {
+  display: none;
+}
+body.viewerOpen {
+  overflow: hidden;
+}
+
+.vwTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.vwInfo {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.vwInfo b {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+#vwMeta {
+  color: #9aa0ad;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.vwTag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
+  font-size: 12px;
+}
+.vwTools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.vwStats {
+  color: #9aa0ad;
+  margin-right: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.vwBtn {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e5e7eb;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.vwBtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+.vwBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.vwStage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 16px 72px;
+  touch-action: pan-y;
+}
+.vwFigure {
+  position: relative;
+  margin: 0;
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+}
+.vwFigure img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 6px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  transition:
+    opacity 0.15s,
+    filter 0.15s;
+}
+.viewer.skipped .vwFigure img {
+  opacity: 0.35;
+  filter: grayscale(0.6);
+}
+.vwState {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(6px);
+}
+.vwState.keep {
+  background: rgba(22, 163, 74, 0.85);
+  color: #fff;
+}
+.vwState.skip {
+  background: rgba(31, 41, 55, 0.9);
+  color: #cbd5e1;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.vwNav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.vwNav:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+}
+.vwNav:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+.vwNav.prev {
+  left: 14px;
+}
+.vwNav.next {
+  right: 14px;
+}
+
+.vwBottom {
+  display: grid;
+  gap: 10px;
+  padding: 10px 20px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.vwDecide {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+.vwChoice {
+  min-width: 170px;
+  padding: 9px 18px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e5e7eb;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.vwChoice kbd {
+  display: inline-block;
+  min-width: 20px;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 0;
+  color: inherit;
+  font: 12px/1.6 inherit;
+}
+.vwChoice.keep:hover,
+.vwChoice.keep[aria-pressed='true'] {
+  border-color: rgba(34, 197, 94, 0.6);
+  background: rgba(22, 163, 74, 0.18);
+  color: #bbf7d0;
+}
+.vwChoice.skip:hover,
+.vwChoice.skip[aria-pressed='true'] {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
+}
+.vwStrip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 2px 6px;
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+.vwThumb {
+  flex: none;
+  width: 96px;
+  height: 54px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #1f2330;
+  cursor: pointer;
+  opacity: 0.75;
+  transition:
+    opacity 0.15s,
+    border-color 0.15s;
+}
+.vwThumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.vwThumb:hover {
+  opacity: 1;
+}
+.vwThumb.off {
+  opacity: 0.28;
+  filter: grayscale(0.8);
+}
+.vwThumb.current {
+  opacity: 1;
+  filter: none;
+  border-color: #fff;
+}
+.vwKeys {
+  text-align: center;
+  color: #6b7180;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .vwTop {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+  }
+  .vwStage {
+    padding: 10px 8px;
+  }
+  .vwNav {
+    display: none;
+  }
+  .vwChoice {
+    min-width: 0;
+    flex: 1;
+  }
+  .vwKeys {
+    display: none;
+  }
+}

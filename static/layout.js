@@ -75,6 +75,18 @@ const Layout = {
     }
     this.el('#resultsEmpty').hidden = page.resultVisible || page.progressVisible;
     this.el('#cardUpload').classList.toggle('compact', !!page.videoName);
+    const file = this.el('#headerFile');
+    if (file.dataset.name !== page.videoName) {
+      file.dataset.name = page.videoName;
+      file.hidden = !page.videoName;
+      file.innerHTML = '';
+      if (page.videoName) {
+        const name = document.createElement('b');
+        name.textContent = page.videoName;
+        file.append('当前视频：', name);
+        file.title = page.videoName;
+      }
+    }
     // Once a video is open the workspace list is rarely needed: fold it away, once per video.
     const sid = typeof state !== 'undefined' ? state.sid : null;
     if (sid && sid !== this.lastSid) this.setWorkspace(false);

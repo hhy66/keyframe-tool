@@ -1,9 +1,10 @@
 /* Faster review of results: keyboard shortcuts and hints for near-duplicate screenshots.
-   Uses `state`, `setKept`, `openLb` and `closeLb` from app.js. */
+   Uses `state`, `setKept` and `openLb` from app.js; the full-screen review is viewer.js. */
 const REVIEW_HINT_KEY = 'keyframe-tool.review.hinted';
 const Review = {
   similarToken: 0,
   flagged: [],
+  scores: [],
   checked: false,
 
   el(selector) {
@@ -28,7 +29,8 @@ const Review = {
       return;
     } // 提示只是辅助，读取失败不影响挑选
     if (token !== this.similarToken || state.resultRun !== res.run) return;
-    this.flagged = this.flags(data.scores || [], data.threshold ?? 80);
+    this.scores = data.scores || [];
+    this.flagged = this.flags(this.scores, data.threshold ?? 80);
     this.checked = true;
     this.paintSimilar(Object.fromEntries(this.flagged.map(i => [i, data.scores[i]])));
   },
@@ -111,14 +113,14 @@ const Review = {
       return true;
     // Other panels own the keyboard while they are open.
     return (
-      ['#collagePanel', '#storageManager', '#dl'].some(selector => this.el(selector) && !this.el(selector).hidden) ||
-      this.el('#cardResult').hidden
+      ['#lb', '#collagePanel', '#storageManager', '#dl'].some(
+        selector => this.el(selector) && !this.el(selector).hidden,
+      ) || this.el('#cardResult').hidden
     );
   },
 
   onKey(event) {
     if (this.blocked(event)) return;
-    const lightbox = !this.el('#lb').hidden;
     const count = state.cards?.length || 0;
     // Letter shortcuts follow the physical key so they also work with a Chinese input method on.
     const key = {KeyX: 'x', KeyE: 'e'}[event.code] || event.key;
@@ -127,18 +129,6 @@ const Review = {
     const target = event.target || {};
     const native = ['BUTTON', 'A', 'SUMMARY'].includes(target.tagName);
     if (native && (key === ' ' || key === 'Enter')) return;
-    if (lightbox) {
-      if (key === 'ArrowRight' || key === 'ArrowLeft') {
-        const next = Math.max(0, Math.min(count - 1, (state.lbIndex ?? 0) + (key === 'ArrowRight' ? 1 : -1)));
-        openLb(next);
-        this.setCursor(next);
-        event.preventDefault();
-      } else if (key === ' ') {
-        state.cards[state.lbIndex]?.toggle();
-        event.preventDefault();
-      }
-      return;
-    }
     if (key === '?') {
       const help = this.el('#shortcutHelp');
       help.open = !help.open;
@@ -169,6 +159,11 @@ const Review = {
 function onResultsRendered(res) {
   Review.loadSimilar(res);
   if (state.cursor != null) Review.setCursor(state.cursor);
+  // New results while reviewing: refresh the film strip and stay on the same position.
+  if (typeof Viewer !== 'undefined' && Viewer.isOpen()) {
+    Viewer.buildStrip();
+    Viewer.show(Viewer.index ?? 0);
+  }
 }
 
 if (typeof document !== 'undefined' && document.querySelector('#btnSkipSimilar')) {
