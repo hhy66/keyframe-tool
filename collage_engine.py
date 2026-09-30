@@ -561,7 +561,7 @@ def storyboard_csv(payload, cuts, spans=None):
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(
-        ['顺序', '原截图编号', '时间码', '帧编号', '镜头开始', '镜头结束', '镜头时长（秒）', '备注', '裁剪']
+        ['顺序', '原截图编号', '时间码', '帧编号', '镜头开始', '镜头结束', '镜头时长（秒）', '运镜', '备注', '裁剪']
     )
     for n, i in enumerate(ids, 1):
         cut = cuts[i]
@@ -575,7 +575,11 @@ def storyboard_csv(payload, cuts, spans=None):
         if note[:1] in ('=', '+', '-', '@'):
             note = "'" + note  # keep spreadsheets from treating a note as a formula
         span = spans[i] if spans else None
-        timing = [_clock(span['start']), _clock(span['end']), f"{span['duration']:.2f}"] if span else ['', '', '']
+        timing = (
+            [_clock(span['start']), _clock(span['end']), f"{span['duration']:.2f}", span.get('motion') or '']
+            if span
+            else ['', '', '', '']
+        )
         writer.writerow(
             [n, f'#{i + 1:03d}', cut.get('label', ''), cut.get('frame_index', ''), *timing, note, crop_text]
         )

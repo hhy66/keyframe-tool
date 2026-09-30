@@ -67,7 +67,7 @@ function shotClock(seconds) {
 function shotSummary(span) {
   const seconds = span.duration;
   return {
-    length: seconds < 10 ? `${seconds.toFixed(1)} 秒` : `${Math.round(seconds)} 秒`,
+    length: seconds < 0.1 ? '不到 0.1 秒' : seconds < 10 ? `${seconds.toFixed(1)} 秒` : `${Math.round(seconds)} 秒`,
     range: `${shotClock(span.start)} – ${shotClock(span.end)}`,
     frames: `${span.frames} 帧`,
   };
@@ -134,7 +134,7 @@ const Analysis = {
     if (!data.items) return this.paintButton(); // progress only
     this.items = data.items;
     this.shots = data.shots || [];
-    this.stripMissing = data.strip_missing || 0;
+    this.stripMissing = (data.strip_missing || 0) + (data.motion_missing || 0);
     this.video = data.video !== false;
     this.paint();
   },
@@ -229,7 +229,7 @@ const Analysis = {
       button.textContent = '✓ 画面已分析';
       button.disabled = true;
     } else {
-      button.textContent = !missing ? '补全镜头画面' : missing < total ? `分析新增的 ${missing} 张` : '分析画面';
+      button.textContent = !missing ? '补全镜头与运镜' : missing < total ? `分析新增的 ${missing} 张` : '分析画面';
       button.disabled = false;
     }
   },
@@ -265,8 +265,9 @@ const Analysis = {
     const length = document.createElement('span');
     length.className = 'shotLength';
     const summary = shotSummary(span);
-    length.textContent = `镜头 ${summary.length}`;
-    length.title = `${summary.range} · ${summary.frames}`;
+    const move = span.motion?.label;
+    length.textContent = `镜头 ${summary.length}` + (move ? ` · ${move}` : '');
+    length.title = [summary.range, summary.frames, span.motion?.text].filter(Boolean).join(' · ');
     row.appendChild(length);
     return row;
   },
@@ -440,7 +441,10 @@ const Analysis = {
     box.appendChild(strip);
     const summary = shotSummary(span);
     const list = document.createElement('dl');
+    const move = span.motion;
     for (const [label, value] of [
+      ['运镜', move ? move.text : this.video ? '点「分析画面」后显示' : '原视频已清理，无法分析'],
+      ...(move?.terms?.length ? [['英文', move.terms.join(', ')]] : []),
       ['时长', summary.length],
       ['起止', summary.range],
       ['帧数', summary.frames],

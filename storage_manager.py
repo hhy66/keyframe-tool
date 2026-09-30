@@ -122,6 +122,7 @@ class Manager:
         self.s._sessions.pop(sid, None)
         self.s._jobs.pop(sid, None)
         getattr(self.s, '_analysis_items', {}).pop(sid, None)
+        getattr(self.s, '_motion_items', {}).pop(sid, None)
 
     def audit(self, event, **data):
         with (self.management() / 'audit.jsonl').open('a', encoding='utf-8') as out:

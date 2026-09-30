@@ -450,15 +450,15 @@ class LabelsNotesAndBatchTests(unittest.TestCase):
         )
         self.assertTrue(text.startswith('﻿'))
         rows = list(csv.reader(io.StringIO(text[1:])))
-        self.assertEqual(rows[0][4:7], ['镜头开始', '镜头结束', '镜头时长（秒）'])
-        self.assertEqual(rows[1], ['1', '#004', '00:00:03', '75', '', '', '', "'=cmd", ''])
-        self.assertEqual(rows[2][:4] + rows[2][7:8], ['2', '#002', '00:00:01', '25', '特写'])
-        self.assertIn('宽50%', rows[2][8])
-        # With shot spans the start, end and length of each shot are filled in.
-        spans = [None, None, None, {'start': 3.0, 'end': 5.5, 'duration': 2.5}, None]
+        self.assertEqual(rows[0][4:8], ['镜头开始', '镜头结束', '镜头时长（秒）', '运镜'])
+        self.assertEqual(rows[1], ['1', '#004', '00:00:03', '75', '', '', '', '', "'=cmd", ''])
+        self.assertEqual(rows[2][:4] + rows[2][8:9], ['2', '#002', '00:00:01', '25', '特写'])
+        self.assertIn('宽50%', rows[2][9])
+        # With shot spans the start, end, length and camera movement of each shot are filled in.
+        spans = [None, None, None, {'start': 3.0, 'end': 5.5, 'duration': 2.5, 'motion': '缓慢推近'}, None]
         text = collage_engine.storyboard_csv({'ids': [3], 'mode': 'share'}, cuts, spans)
         rows = list(csv.reader(io.StringIO(text[1:])))
-        self.assertEqual(rows[1][4:7], ['00:00:03.000', '00:00:05.500', '2.50'])
+        self.assertEqual(rows[1][4:8], ['00:00:03.000', '00:00:05.500', '2.50', '缓慢推近'])
 
 
 class RenderAllTests(unittest.TestCase):

@@ -146,10 +146,15 @@ class ShotJobTests(unittest.TestCase):
         self.assertEqual(state['shots'][1]['strip'], [60, 89, 119])
         self.assertEqual(state['shots'][0]['strip_ready'], [False, False, False])
         job = server.start_analysis('s1', {'run': 'r1'})['job']
-        self.assertEqual(job['total'], 2 + 6)
+        self.assertEqual(state['motion_missing'], 2)
+        self.assertEqual(state['shots'][0]['motion'], None)
+        # 2 pictures to analyse, plus every frame read for the strips and the camera movement.
+        self.assertGreater(job['total'], 2 + 6)
         self.wait()
         state = server.analysis('s1', 'r1')
-        self.assertEqual((state['status'], state['strip_missing']), ('done', 0))
+        self.assertEqual((state['status'], state['strip_missing'], state['motion_missing']), ('done', 0, 0))
+        self.assertIn('text', state['shots'][0]['motion'])  # flat test frames: no texture to track
+        self.assertEqual(set(server._motion_cache('s1')), {'0-59', '60-119'})
         self.assertEqual(state['shots'][1]['strip_ready'], [True, True, True])
         self.assertEqual(frame_number(self.root / 's1' / 'strip' / '89.jpg'), 89)
         self.assertEqual(Path(server.strip_image('s1', 89).path).name, '89.jpg')

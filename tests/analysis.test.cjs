@@ -82,6 +82,7 @@ test('a shot reads as its length, start – end and frame count', () => {
   assert.deepEqual(summary, {length: '2.4 秒', range: '01:01.2 – 01:03.6', frames: '61 帧'});
   assert.equal(shotSummary({duration: 14.6, start: 0, end: 14.6, frames: 365}).length, '15 秒');
   assert.equal(shotClock(3725.25), '1:02:05.3');
+  assert.equal(shotSummary({duration: 0.04, start: 0, end: 0.04, frames: 1}).length, '不到 0.1 秒');
 });
 
 test('the viewer has the shot frame tag and number keys are documented', () => {
