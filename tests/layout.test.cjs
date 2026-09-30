@@ -93,3 +93,34 @@ test('every navigator entry and layout hook exists in the page', () => {
     assert.match(left, new RegExp(`id="${id}"`));
   for (const id of ['cardProgress', 'cardResult', 'resultsEmpty']) assert.match(right, new RegExp(`id="${id}"`));
 });
+test('a dragged divider stays within its bounds', () => {
+  const {layoutSplitWidth} = load();
+  assert.equal(layoutSplitWidth(500, 100, 260, 800), 400);
+  assert.equal(layoutSplitWidth(200, 100, 260, 800), 260, 'never narrower than the minimum');
+  assert.equal(layoutSplitWidth(1500, 100, 260, 800), 800, 'the other column keeps its room');
+  assert.equal(layoutSplitWidth(500, 100, 260, 100), 260, 'a small window still gets the minimum');
+});
+test('every divider and full view exists, and the views use the same two-column shell', () => {
+  const html = fs.readFileSync('static/index.html', 'utf8');
+  const context = load();
+  for (const {splitter, columns} of Object.values(vm.runInContext('LAYOUT_SPLITS', context))) {
+    assert.match(html, new RegExp(`id="${splitter.slice(1)}"[^>]*role="separator"`), splitter);
+    if (columns?.startsWith('#')) assert.match(html, new RegExp(`id="${columns.slice(1)}"`), columns);
+  }
+  for (const [key, {view, close}] of Object.entries(vm.runInContext('LAYOUT_VIEWS', context))) {
+    assert.match(html, new RegExp(`id="${view.slice(1)}" class="appView"`), view);
+    assert.match(html, new RegExp(`id="${close.slice(1)}"`), close);
+    assert.match(html, new RegExp(`data-nav="${key}"`), key);
+  }
+  // Each view: header, left column, divider, right column.
+  for (const [view, divider] of [
+    ['storageManager', 'storageSplitter'],
+    ['collagePanel', 'collageSplitter'],
+  ]) {
+    const start = html.indexOf(`id="${view}"`);
+    const part = html.slice(start, html.indexOf(`id="${divider}"`) + 200);
+    assert.ok(part.indexOf('viewHead') < part.indexOf('viewLeft'), view);
+    assert.ok(part.indexOf('viewLeft') < part.indexOf(divider), view);
+    assert.match(part.slice(part.indexOf(divider)), /viewRight/, view);
+  }
+});

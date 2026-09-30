@@ -1,40 +1,11 @@
-.storageOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  overflow: auto;
-  background: #eef0f5;
-  padding: 18px;
-}
-.storagePage {
-  max-width: 1180px;
-  margin: auto;
-  background: white;
-  border: 1px solid #dbe0e8;
-  border-radius: 14px;
+/* Storage manager: an app view (see layout.css) with usage and filters left, records right. */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
   overflow: hidden;
-}
-.storageHeader {
-  background: #162333;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  text-align: left;
-  padding: 24px;
-}
-.storageHeader h2 {
-  margin: 0;
-  font-size: 23px;
-  color: #fff;
-}
-.storageHeader p {
-  margin: 8px 0 0;
-  color: #c3d0df;
-  font-size: 13px;
-}
-.storageBody {
-  padding: 24px;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 .storagePath {
   display: flex;
@@ -42,7 +13,6 @@
   align-items: center;
   flex-wrap: wrap;
   font-size: 13px;
-  margin-bottom: 18px;
 }
 .storagePath input {
   flex: 1;
@@ -50,8 +20,8 @@
   color: #45546a;
   background: #f7f9fc;
 }
-.storageBody input,
-.storageBody select,
+#storageManager input,
+#storageManager select,
 .cleanupBox input:not([type='radio']) {
   padding: 9px;
   border: 1px solid #cdd5df;
@@ -60,11 +30,11 @@
 }
 .storageSummary {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
 }
 .storageMetric {
-  padding: 17px;
+  padding: 12px 14px;
   background: #f6f8fb;
   border: 1px solid #e3e8ef;
   border-radius: 10px;
@@ -76,8 +46,8 @@
 }
 .storageMetric strong {
   display: block;
-  margin-top: 7px;
-  font-size: 23px;
+  margin-top: 5px;
+  font-size: 20px;
   font-variant-numeric: tabular-nums;
   color: #17283c;
 }
@@ -90,15 +60,25 @@
   color: #304c6f;
 }
 .storageTools {
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: 10px;
-  flex-wrap: wrap;
-  margin: 20px 0 12px;
 }
-.storageTools input {
-  margin-left: auto;
-  min-width: 230px;
+.storageTabs {
+  display: flex;
+  gap: 8px;
+}
+.storageTabs .btn {
+  flex: 1;
+}
+.storageTools input,
+.storageTools select {
+  width: 100%;
+}
+.storageNotice {
+  margin: 12px 0 0;
+}
+#storageStatus {
+  margin-top: 0;
 }
 #storageStatus {
   color: #516076;
@@ -334,22 +314,6 @@
   color: #a33036;
 }
 @media (max-width: 650px) {
-  .storageOverlay {
-    padding: 0;
-  }
-  .storagePage {
-    border-radius: 0;
-  }
-  .storageBody {
-    padding: 14px;
-  }
-  .storageHeader {
-    padding: 18px;
-    align-items: flex-start;
-  }
-  .storageHeader h2 {
-    font-size: 19px;
-  }
   .storageVersion {
     grid-template-columns: auto 48px 1fr;
   }
@@ -364,10 +328,6 @@
   }
   .cleanupColumns {
     grid-template-columns: 1fr;
-  }
-  .storageTools input {
-    margin-left: 0;
-    width: 100%;
   }
   .storageThumb {
     width: 50px;

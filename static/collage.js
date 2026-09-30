@@ -911,6 +911,10 @@ const CollageUI = {
     link.download = filename;
     link.click();
   },
+  // Second confirmation (confirm.js) before a download; without it, go straight ahead.
+  ask(options) {
+    return typeof Confirm === 'undefined' ? Promise.resolve(true) : Confirm.ask(options);
+  },
   async downloadAll() {
     if (this.busy || !this.snapshot || !this.ids.length) return;
     let payload;
@@ -922,6 +926,13 @@ const CollageUI = {
     }
     const snapshot = this.snapshot,
       pages = Math.ceil(payload.ids.length / payload.per_page);
+    const ok = await this.ask({
+      kind: 'download',
+      title: `下载全部 ${pages} 张拼图？`,
+      message: `会逐张生成拼图（共 ${payload.ids.length} 张参考图），连同分镜表 CSV 打包成 zip 交给浏览器保存。`,
+      ok: '生成并下载',
+    });
+    if (!ok || this.busy || snapshot !== this.snapshot) return;
     this.busy = true;
     this.summary();
     this.el('#collageStatus').textContent = `正在逐张生成 ${pages} 张拼图并打包，请稍候…`;
@@ -950,6 +961,13 @@ const CollageUI = {
       this.el('#collageStatus').textContent = e.message;
       return;
     }
+    const ok = await this.ask({
+      kind: 'download',
+      title: '导出分镜表 CSV？',
+      message: `按拼图顺序导出 ${payload.ids.length} 张的时间码与备注，交给浏览器保存，可用 Excel 打开。`,
+      ok: '导出',
+    });
+    if (!ok || !this.snapshot) return;
     try {
       const response = await fetch(`/api/collage/${encodeURIComponent(this.snapshot.sid)}/storyboard`, {
         method: 'POST',
@@ -1002,6 +1020,15 @@ collageOn('#collageNext', 'click', () => CollageUI.changePage(1));
 collageOn('#collageRender', 'click', () => CollageUI.generate());
 collageOn('#collageShowResult', 'click', () => CollageUI.showResult());
 collageOn('#collageResultClose', 'click', () => CollageUI.closeResult());
+if (typeof Confirm !== 'undefined')
+  Confirm.guardLink(CollageUI.el('#collageDownload'), () => ({
+    kind: 'download',
+    title: '下载这张拼图？',
+    message: CollageUI.output
+      ? `第 ${CollageUI.output.page + 1}/${CollageUI.output.pages} 张 · ${CollageUI.output.width} × ${CollageUI.output.height} · ${CollageUI.output.format.toUpperCase()}，交给浏览器保存。`
+      : '',
+    ok: '下载',
+  }));
 collageOn('#collageDownload', 'click', event => CollageUI.download(event));
 collageOn('#collageDownloadAll', 'click', () => CollageUI.downloadAll());
 collageOn('#collageCsv', 'click', () => CollageUI.exportCsv());
