@@ -24,6 +24,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
+import corrections
 import cv2
 import frame_analysis
 import motion
@@ -1007,6 +1008,9 @@ def _analysis_state(sid, run, items=True):
             }
             for span in spans
         ]
+        fixes = _correction_cache(sid)
+        state["corrections"] = [(fixes.get(_asset_key(result, i)) or {}).get("fix") for i in range(len(result["cuts"]))]
+        state["corrections_total"] = len(fixes)
     return state
 
 
@@ -1086,6 +1090,103 @@ def strip_image(sid: str, frame: int):
     if frame < 0 or not path.is_file():
         raise HTTPException(404, "镜头小图不存在，请点「分析画面」生成")
     return _file_response(sid, path, media_type="image/jpeg")
+
+
+# ---------------------------------------------------------------- 纠错
+# 用户觉得分析不对时在大图里纠正；连同当时的测量值存进 corrections.json，导出后用于校准。
+# 不算缓存：清理缓存、重新分析都不会删除它。
+_corrections: dict[str, dict] = {}  # session_id -> {"run/编号": 记录}
+_corrections_write = threading.Lock()
+
+
+def _cut_signal(ses, span):
+    """这个镜头附近的画面变化强度：开头那一帧，以及镜头里最强的几次变化（校准漏切 / 多切用）。"""
+    diffs = ses.get("cache", {}).get("diffs")
+    if diffs is None or not span or len(diffs) < 2:
+        return None
+    start, end = span["start_frame"], min(span["end_frame"], len(diffs) - 1)
+    inside = np.asarray(diffs[start + 1 : end + 1], dtype=np.float32)
+    top = np.argsort(inside)[::-1][:5] if len(inside) else []
+    return {
+        "median": round(float(np.median(diffs[1:])), 3),
+        "p65": round(float(np.percentile(diffs, 65)), 3),
+        "at_start": round(float(diffs[start]), 3) if start < len(diffs) else None,
+        "peaks": [[int(start + 1 + k), round(float(inside[k]), 3)] for k in top],
+    }
+
+
+def _correction_cache(sid):
+    if sid not in _corrections:
+        _corrections[sid] = corrections.load(workspace_store.safe_path(WORK, sid, corrections.FILE))
+    return _corrections[sid]
+
+
+@app.put("/api/corrections/{sid}")
+@_storage_guard
+def save_correction(sid: str, payload: dict):
+    """保存（或清除）一张截图的纠错。index 是这张图在结果 run 里的位置。"""
+    ses = _session(sid)
+    run, index = payload.get("run"), payload.get("index")
+    result = ses.get("results", {}).get(run) if isinstance(run, str) else None
+    if not result:
+        raise HTTPException(404, "结果已更新，请刷新")
+    if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(result["cuts"]):
+        raise HTTPException(400, "截图编号无效")
+    try:
+        fix = corrections.clean(payload.get("fix"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    key = _asset_key(result, index)
+    with _corrections_write:
+        items = _correction_cache(sid)
+        if fix is None:
+            items.pop(key, None)
+        else:
+            cut = result["cuts"][index]
+            span = _spans(ses, result)[index]
+            old = items.get(key, {})
+            items[key] = {
+                "fix": fix,
+                "updated_at": storage_manager.now(),
+                "index": index,
+                "time": cut.get("time"),
+                "label": cut.get("label"),
+                "kind": cut.get("kind"),
+                "frame_index": cut.get("frame_index"),
+                "source_frame": cut.get("source_frame"),
+                "shot_span": span,
+                # 纠错时看到的测量值：之后算法更新重算，也知道当时错在哪
+                "analysis": old.get("analysis") or _analysis_cache(sid).get(key),
+                "motion": old.get("motion") or (_motion_cache(sid).get(_motion_key(span)) if span else None),
+                "cut_signal": _cut_signal(ses, span),
+                "params": result.get("params"),
+                "meta": result.get("meta"),
+            }
+        workspace_store.atomic_json(workspace_store.safe_path(WORK, sid, corrections.FILE), corrections.document(items))
+    return {"fix": fix, "total": len(items)}
+
+
+@app.get("/api/corrections/{sid}/export")
+@_storage_guard
+def export_corrections(sid: str):
+    """全部纠错记录（JSON，只有数值和文字）。"""
+    from urllib.parse import quote
+
+    ses = _session(sid)
+    data = corrections.export(
+        _correction_cache(sid),
+        ses.get("video_name", ""),
+        _analysis_cache(sid),
+        _motion_cache(sid),
+        {"analysis": frame_analysis.ANALYSIS_VERSION, "motion": motion.MOTION_VERSION},
+    )
+    name = quote(f"纠错记录_{_collage_video_name(sid)}.json")
+    return Response(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        media_type="application/json; charset=utf-8",
+        # 旧浏览器不认 filename*，退回英文名
+        headers={"Content-Disposition": f"attachment; filename=\"corrections.json\"; filename*=UTF-8''{name}"},
+    )
 
 
 @app.get("/api/thumb/{sid}/{run}/{i}")

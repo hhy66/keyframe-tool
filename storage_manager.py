@@ -17,6 +17,7 @@ from collage_engine import managed_file
 
 MANAGEMENT = '.storage'
 ANALYSIS_FILE = 'analysis.json'  # 画面分析结果，与 server.ANALYSIS_FILE 相同
+CORRECTIONS_FILE = 'corrections.json'  # 纠错记录，与 corrections.FILE 相同
 STRIP_DIR = 'strip'  # 镜头首 / 中 / 尾帧小图，与 server.STRIP_DIR 相同
 
 
@@ -123,6 +124,7 @@ class Manager:
         self.s._jobs.pop(sid, None)
         getattr(self.s, '_analysis_items', {}).pop(sid, None)
         getattr(self.s, '_motion_items', {}).pop(sid, None)
+        getattr(self.s, '_corrections', {}).pop(sid, None)
 
     def audit(self, event, **data):
         with (self.management() / 'audit.jsonl').open('a', encoding='utf-8') as out:
@@ -247,6 +249,7 @@ class Manager:
         ]
         known.update(p for p, _, _ in vp + cp + tmp)
         known.add(str(d / 'manifest.json'))
+        known.add(str(d / CORRECTIONS_FILE))  # 纠错记录属于这条记录本身，不算缓存
         unknown = sum(n for p, n, _ in tree(d) if p not in known)
         result = ses['results'].get(ses.get('latest_run'), {})
         return dict(
