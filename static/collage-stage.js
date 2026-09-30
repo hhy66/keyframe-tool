@@ -87,7 +87,7 @@ class CollageStage {
     const generation = this.generation;
     this.plan = plan;
     const available = Math.max(240, (this.container.clientWidth || 640) - 16);
-    const scale = Math.min(available / plan.width, Math.max(320, window.innerHeight - 330) / plan.height);
+    const scale = Math.min(available / plan.width, Math.max(280, window.innerHeight - 390) / plan.height);
     this.stage = new Konva.Stage({
       container: this.container,
       width: Math.round(plan.width * scale),

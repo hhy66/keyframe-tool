@@ -338,12 +338,57 @@ test('simple presets and the capture strategy are sent with the analysis', async
   app.$('#pick').value = 'sharp';
   app.$('#pick').events.change();
   await settle();
+  const analyses = () => calls.filter(c => c.url === '/api/analyze').map(c => JSON.parse(c.options.body));
+  assert.equal(analyses().length, 1, 'before the first result a change starts the analysis by itself');
+  assert.equal(app.run('state.resultRun'), 'r1');
   app.$('#sensMany').click();
   await settle();
-  const bodies = calls.filter(c => c.url === '/api/analyze').map(c => JSON.parse(c.options.body));
-  assert.equal(bodies.at(-1).pick, 'sharp');
-  assert.equal(bodies.at(-1).sensitivity, 80);
+  assert.equal(analyses().length, 1, 'with a result on screen a change only marks the parameters');
+  assert.equal(app.$('#btnAgain').textContent, '按新参数重新分析');
   assert.equal(Number(app.$('#sens').value), 80);
+  app.$('#btnAgain').click();
+  await settle();
+  assert.equal(analyses().length, 2);
+  assert.equal(analyses().at(-1).pick, 'sharp');
+  assert.equal(analyses().at(-1).sensitivity, 80);
+  assert.equal(app.$('#btnAgain').textContent, '重新分析');
+});
+
+test('downloads and re-analysis wait for the second confirmation', async () => {
+  const calls = [];
+  const answers = [];
+  const app = boot({
+    fetchImpl: async (url, options = {}) => {
+      calls.push({url, options});
+      if (url.includes('/api/export/')) return {ok: true, status: 200, json: async () => ({url: '/zip', count: 2})};
+      return {ok: true, status: 200, json: async () => (url.includes('/api/analyze') ? {run: 'r2'} : done)};
+    },
+  });
+  app.context.Confirm = {
+    asked: [],
+    ask(options) {
+      this.asked.push(options);
+      return Promise.resolve(answers.shift());
+    },
+  };
+  app.run("state.sid='s1'; render(fixture)".replace('fixture', JSON.stringify(result)));
+  const count = part => calls.filter(c => c.url.includes(part)).length;
+  answers.push(false);
+  await app.run('download()');
+  assert.equal(count('/api/export/'), 0, 'a declined download sends nothing');
+  assert.match(app.context.Confirm.asked.at(-1).title, /2 张/);
+  answers.push(true);
+  await app.run('download()');
+  assert.equal(count('/api/export/'), 1);
+  answers.push(false);
+  app.$('#btnAgain').click();
+  await settle();
+  assert.equal(count('/api/analyze'), 0, 'a declined re-analysis keeps the result');
+  assert.equal(app.context.Confirm.asked.at(-1).kind, 'analyze');
+  answers.push(true);
+  app.$('#btnAgain').click();
+  await settle();
+  assert.equal(count('/api/analyze'), 1);
 });
 
 test('skip state follows the detected cut, not the captured frame', () => {

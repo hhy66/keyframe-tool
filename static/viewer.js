@@ -191,6 +191,13 @@ if (typeof document !== 'undefined' && document.querySelector('#vwStrip')) {
   on('#vwSkip', () => Viewer.mark(false, true));
   on('#vwEdit', () => Viewer.edit());
   on('#lbClose', () => Viewer.close());
+  if (typeof Confirm !== 'undefined')
+    Confirm.guardLink(document.querySelector('#vwDownload'), () => ({
+      kind: 'download',
+      title: '下载这张原图？',
+      message: `${document.querySelector('#vwMeta').textContent}，原始分辨率 JPEG，交给浏览器保存。`,
+      ok: '下载',
+    }));
   // Swipe left / right on touch screens.
   const stage = document.querySelector('#vwStage');
   stage.addEventListener('pointerdown', event => {

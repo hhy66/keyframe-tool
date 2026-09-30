@@ -41,6 +41,8 @@ const kindName = {
   adjusted: '已微调',
   archived: '旧截图',
 };
+// Second confirmation (confirm.js) before downloads and analysis runs; without it, go straight ahead.
+const askFirst = options => (typeof Confirm === 'undefined' ? Promise.resolve(true) : Confirm.ask(options));
 const sensName = v => (v < 33 ? '保守' : v > 66 ? '敏感' : '适中');
 // 首次使用只需选“少 / 适中 / 多”，滑块留在高级参数里。
 const SENS_PRESETS = [
@@ -157,8 +159,10 @@ function syncInfo(info, params = true) {
     $('#chkEnds').checked = state.ends;
     $('#minScene').value = state.minimum;
     $('#chkFlash').checked = state.flash;
+    state.paramsDirty = false;
   }
   showSens();
+  showParamsState();
 }
 function setUploadBusy(busy) {
   state.busy = busy;
@@ -236,6 +240,8 @@ async function analyze() {
   }
   state.analyzing = true;
   state.jobRunning = true;
+  state.paramsDirty = false;
+  showParamsState();
   updateEditorControls();
   state.pendingAnalyze = false;
   const sid = state.sid;
@@ -637,7 +643,21 @@ function closeLb() {
 }
 
 async function download() {
-  if (!state.sid || !state.resultRun || !state.sel.size || state.dlBusy || state.sel.size > state.maxExport) return;
+  const ready = () =>
+    state.sid && state.resultRun && state.sel.size && !state.dlBusy && state.sel.size <= state.maxExport;
+  if (!ready()) return;
+  const skipped = state.cuts.length - state.sel.size;
+  const ok = await askFirst({
+    kind: 'download',
+    title: `下载选中的 ${state.sel.size} 张关键帧？`,
+    message: '打包为 zip 交给浏览器保存，图片为视频原始分辨率 JPEG。',
+    details: [
+      skipped > 0 ? `已跳过的 ${skipped} 张不会打包。` : '',
+      '在「本次打开期间不再询问」打勾后，之后的下载直接开始。',
+    ],
+    ok: '开始下载',
+  });
+  if (!ok || !ready()) return;
   state.dlBusy = true;
   updateToolbar();
   $('#dl').hidden = false;
@@ -700,11 +720,46 @@ drop.addEventListener('drop', e => {
   const f = e.dataTransfer?.files?.[0];
   if (f) upload(f);
 });
+// Before the first result, parameter changes re-run the analysis by themselves. Once there are
+// results, they only mark the parameters as changed: the list is replaced after a confirmed click.
+function paramsChanged(delay = 0) {
+  clearTimeout(sensTimer);
+  if (!state.resultRun) {
+    if (delay) sensTimer = setTimeout(analyze, delay);
+    else analyze();
+    return;
+  }
+  state.paramsDirty = true;
+  showParamsState();
+}
+function showParamsState() {
+  const dirty = !!state.paramsDirty && !!state.resultRun;
+  const again = $('#btnAgain');
+  again.classList.toggle('ghost', !dirty);
+  again.classList.toggle('dirty', dirty);
+  again.textContent = dirty ? '按新参数重新分析' : '重新分析';
+  $('#paramsHint').textContent = dirty
+    ? '参数已修改，点「按新参数重新分析」后生效；在那之前结果保持不变。'
+    : '首次分析会自动开始；之后修改参数，点「重新分析」生效，已完成的扫描会复用。截图不理想时，可在结果里单张“逐帧微调”。';
+}
+async function reanalyze() {
+  if (!state.sid || state.busy || state.editBusy) return;
+  if (state.resultRun) {
+    const ok = await askFirst({
+      kind: 'analyze',
+      title: state.paramsDirty ? '按新参数重新分析？' : '重新分析这段视频？',
+      message: '会重新检测镜头并替换当前的结果列表，已完成的扫描会复用。',
+      details: ['手动补入和逐帧微调过的截图会保留。', '分析期间现有结果仍可预览和下载。'],
+      ok: '开始分析',
+    });
+    if (!ok) return;
+  }
+  analyze();
+}
 $('#sens').addEventListener('input', () => {
   state.sens = +$('#sens').value;
   showSens();
-  clearTimeout(sensTimer);
-  sensTimer = setTimeout(analyze, 500);
+  paramsChanged(500);
 });
 SENS_PRESETS.forEach(([id, value]) =>
   $(id).addEventListener('click', () => {
@@ -712,31 +767,39 @@ SENS_PRESETS.forEach(([id, value]) =>
     state.sens = value;
     $('#sens').value = value;
     showSens();
-    analyze();
+    paramsChanged();
   }),
 );
 $('#pick').addEventListener('change', () => {
   state.pick = $('#pick').value;
-  analyze();
+  paramsChanged();
 });
 showSens();
 $('#chkEnds').addEventListener('change', () => {
   state.ends = $('#chkEnds').checked;
-  analyze();
+  paramsChanged();
 });
 $('#chkFlash').addEventListener('change', () => {
   state.flash = $('#chkFlash').checked;
-  analyze();
+  paramsChanged();
 });
 $('#minScene').addEventListener('change', () => {
   state.minimum = +$('#minScene').value;
-  analyze();
+  paramsChanged();
 });
-$('#btnAgain').addEventListener('click', analyze);
+$('#btnAgain').addEventListener('click', reanalyze);
 $('#btnRetry').addEventListener('click', () => startPoll(true));
 $('#btnCancel').addEventListener('click', async () => {
   const sid = state.sid;
   const run = state.run;
+  const ok = await askFirst({
+    kind: 'cancel',
+    title: '取消这次分析？',
+    message: '已有结果不受影响，之后可以再点「重新分析」。',
+    ok: '取消分析',
+    cancel: '继续分析',
+  });
+  if (!ok || sid !== state.sid || run !== state.run || $('#btnCancel').hidden) return;
   clearTimeout(sensTimer);
   state.pendingAnalyze = false;
   $('#btnCancel').disabled = true;

@@ -2,6 +2,7 @@
 :root {
   --navw: 212px;
   --headerh: 56px;
+  --splitw: 14px;
 }
 body.navCollapsed {
   --navw: 60px;
@@ -109,8 +110,10 @@ body.navCollapsed {
 }
 .appColumns {
   display: grid;
-  grid-template-columns: clamp(400px, 34vw, 560px) minmax(0, 1fr);
-  gap: 16px;
+  /* --leftw is set by dragging the splitter; the right column always keeps room for results. */
+  grid-template-columns:
+    clamp(320px, var(--leftw, clamp(400px, 34vw, 560px)), calc(100% - var(--splitw) - 420px))
+    var(--splitw) minmax(0, 1fr);
   padding: 14px 16px 0;
   min-width: 0;
 }
@@ -518,4 +521,214 @@ details.shortcuts th {
   padding: 8px 0 2px;
   color: #4b5563;
   font-weight: 600;
+}
+
+/* Draggable dividers: between the navigator and the page, and between left and right columns.
+   Drag to resize, double-click (or Enter) to reset, arrow keys for small steps. */
+.splitter {
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.splitter:hover::after,
+.splitter:focus-visible::after,
+.splitter.dragging::after {
+  background: var(--accent);
+}
+.splitter:focus-visible::after {
+  width: 4px;
+  margin-left: -2px;
+}
+#navSplitter {
+  position: fixed;
+  top: var(--headerh);
+  bottom: 0;
+  left: calc(var(--navw) - 5px);
+  width: 10px;
+  z-index: 45;
+}
+body.resizing,
+body.resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+body.resizing .appShell {
+  transition: none;
+}
+
+/* Full views (storage manager, reference collage): same shell as the main page, header and
+   navigator stay visible, the view has its own left and right columns. */
+.appView {
+  position: fixed;
+  top: var(--headerh);
+  left: var(--navw);
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  transition: left 0.18s;
+}
+body.resizing .appView {
+  transition: none;
+}
+.viewHead {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.viewTitle {
+  flex: 1;
+  min-width: 0;
+}
+.viewTitle h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  color: #111827;
+}
+.viewTitle p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: #8a90a0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.viewActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: none;
+}
+.viewColumns {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns:
+    clamp(260px, var(--leftw, 360px), calc(100% - var(--splitw) - 420px))
+    var(--splitw) minmax(0, 1fr);
+  padding: 14px 16px 0;
+}
+.viewCol {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-width: 0;
+  padding: 0 4px 24px;
+  box-sizing: border-box;
+}
+.viewCol .card {
+  margin-bottom: 14px;
+}
+.viewCardTitle {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+.navItem.active {
+  background: #eef0ff;
+  color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.navItem.active svg {
+  color: var(--accent);
+}
+
+/* Narrow screens: views scroll as one column under the header; no dividers. */
+@media (max-width: 1099px) {
+  .splitter {
+    display: none;
+  }
+  .appView {
+    left: 0;
+    overflow-y: auto;
+  }
+  .viewHead {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+  }
+  .viewColumns {
+    display: block;
+    padding: 12px 12px 70px;
+  }
+  .viewCol {
+    height: auto;
+    overflow: visible;
+    padding: 0;
+  }
+  .viewColumns {
+    flex: none;
+  }
+}
+
+/* Parameters changed after a result: the re-run button asks for attention. */
+.btn.dirty {
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.18);
+}
+
+/* Second confirmation before downloads and analysis runs. */
+.modal.confirmModal {
+  z-index: 95;
+}
+.confirmBox {
+  width: min(440px, 100%);
+  background: #fff;
+  border-radius: 14px;
+  padding: 20px 22px 18px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+.confirmBox h2 {
+  margin: 0 0 8px;
+  font-size: 16.5px;
+  color: #111827;
+}
+.confirmBox p {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: #4b5563;
+}
+.confirmBox ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: #6b7280;
+}
+.confirmSkip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: #6b7280;
+  cursor: pointer;
+  user-select: none;
+}
+.confirmSkip input {
+  accent-color: var(--accent);
+}
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
 }
