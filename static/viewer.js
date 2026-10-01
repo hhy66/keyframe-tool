@@ -33,6 +33,7 @@ const Viewer = {
   close() {
     if (!this.isOpen()) return;
     if (typeof Corrections !== 'undefined') Corrections.flush();
+    if (typeof Clip !== 'undefined') Clip.release();
     const last = this.index;
     this.el('#lb').hidden = true;
     this.el('#vwImg').removeAttribute('src');
@@ -47,7 +48,10 @@ const Viewer = {
     const count = this.count();
     if (!count) return this.close();
     i = Math.max(0, Math.min(count - 1, i));
-    // A new picture always opens on its keyframe, not on the previous shot's first or last frame.
+    // A new picture opens on its keyframe, not on the previous shot's first or last frame; while
+    // clips are playing, the next shot plays too, so shots can be watched one after another.
+    const clip = typeof Clip !== 'undefined' && Clip.active();
+    if (typeof Clip !== 'undefined') Clip.hide();
     if (typeof Analysis !== 'undefined') Analysis.viewing = 0;
     this.el('#vwFrameTag').hidden = true;
     this.el('#vwImg').onerror = null;
@@ -75,6 +79,7 @@ const Viewer = {
     this.el('#vwPrev').disabled = this.neighbor(i, -1) === i;
     this.el('#vwNext').disabled = this.neighbor(i, 1) === i;
     this.el('#vwEdit').disabled = !state.cards?.[i] || state.cards[i].edit.disabled;
+    if (clip && Clip.show(i, true)) Analysis.viewing = CLIP_VIEW;
     if (typeof Analysis !== 'undefined') Analysis.paintViewer(i);
     this.paint();
     this.preload(i);
@@ -123,15 +128,20 @@ const Viewer = {
   // Scale the picture to the free space, small sources included, keeping its shape;
   // sizing the image itself keeps the keep/skip label on the picture's corner.
   fit() {
-    const image = this.el('#vwImg');
+    // The picture, or the shot's clip while it plays (with its controls below it).
+    const clip = typeof Clip !== 'undefined' && Clip.active();
+    const media = clip ? Clip.video() : this.el('#vwImg');
+    const naturalWidth = clip ? media.videoWidth : media.naturalWidth;
+    const naturalHeight = clip ? media.videoHeight : media.naturalHeight;
     const stage = this.el('#vwStage');
-    if (!image.naturalWidth || !stage.clientWidth) return;
+    if (!naturalWidth || !stage.clientWidth) return;
     const style = getComputedStyle(stage);
+    const bar = clip ? this.el('#vwClipBar').offsetHeight + parseFloat(style.rowGap || 0) : 0;
     const width = stage.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-    const height = stage.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-    const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
-    image.style.width = `${Math.max(1, Math.floor(image.naturalWidth * scale))}px`;
-    image.style.height = `${Math.max(1, Math.floor(image.naturalHeight * scale))}px`;
+    const height = stage.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - bar;
+    const scale = Math.min(width / naturalWidth, height / naturalHeight);
+    media.style.width = `${Math.max(1, Math.floor(naturalWidth * scale))}px`;
+    media.style.height = `${Math.max(1, Math.floor(naturalHeight * scale))}px`;
   },
 
   preload(i) {
@@ -189,6 +199,10 @@ const Viewer = {
         Digit1: '1',
         Digit2: '2',
         Digit3: '3',
+        Digit4: '4',
+        KeyK: 'k',
+        Comma: ',',
+        Period: '.',
       }[event.code] || event.key.toLowerCase();
     const actions = {
       arrowleft: () => this.show(this.neighbor(this.index, -1)),
@@ -207,6 +221,10 @@ const Viewer = {
       1: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(1),
       2: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(2),
       3: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(3),
+      4: () => typeof Analysis !== 'undefined' && Analysis.viewFrame(CLIP_VIEW),
+      k: () => typeof Clip !== 'undefined' && Clip.toggle(),
+      ',': () => typeof Clip !== 'undefined' && Clip.step(-1),
+      '.': () => typeof Clip !== 'undefined' && Clip.step(1),
       d: () => this.el('#vwDownload').click(),
       escape: () => this.close(),
     };

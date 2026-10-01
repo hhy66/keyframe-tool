@@ -404,10 +404,28 @@
     <button type="button" class="vwNav prev" id="vwPrev" aria-label="上一张（←）">‹</button>
     <figure class="vwFigure">
       <img id="vwImg" alt="">
+      <video id="vwClip" class="vwClip" playsinline preload="metadata" hidden></video>
       <svg id="vwGuides" class="vwGuides" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true" hidden></svg>
       <span id="vwState" class="vwState"></span>
       <span id="vwFrameTag" class="vwFrameTag" hidden></span>
     </figure>
+    <div class="vwClipBar" id="vwClipBar" hidden>
+      <button type="button" class="vwBtn vwClipPlay" id="vwClipPlay" aria-label="播放（K）">▶</button>
+      <button type="button" class="vwBtn vwClipStep" id="vwClipPrev" title="上一帧（,）" aria-label="上一帧">‹</button>
+      <div class="vwClipTrack" id="vwClipTrack" title="单击或拖动到某一帧；三个刻度是首帧、中间、尾帧">
+        <div class="vwClipFill" id="vwClipFill"></div>
+        <div class="vwClipMarks" id="vwClipMarks"></div>
+      </div>
+      <button type="button" class="vwBtn vwClipStep" id="vwClipNext" title="下一帧（.）" aria-label="下一帧">›</button>
+      <span class="vwClipTime" id="vwClipTime" aria-live="off"></span>
+      <span class="vwClipSpeeds" id="vwClipSpeeds" role="group" aria-label="播放速度">
+        <button type="button" data-speed="0.25" aria-pressed="false">0.25×</button>
+        <button type="button" data-speed="0.5" aria-pressed="false">0.5×</button>
+        <button type="button" data-speed="1" aria-pressed="true">1×</button>
+      </span>
+      <button type="button" class="vwBtn" id="vwClipSound" aria-pressed="false">声音：关</button>
+      <button type="button" class="vwBtn" id="vwClipBack" title="回到截图（0）">回到截图</button>
+    </div>
     <button type="button" class="vwNav next" id="vwNext" aria-label="下一张（→）">›</button>
   </div>
   <aside class="vwPanel" id="vwAnalysis" hidden aria-label="画面分析"></aside>
@@ -417,7 +435,7 @@
       <button type="button" class="vwChoice keep" id="vwKeep" aria-pressed="true"><kbd>↑</kbd> 保留并下一张</button>
     </div>
     <div class="vwStrip" id="vwStrip" aria-label="全部截图"></div>
-    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · 1 / 2 / 3 首 · 中 · 尾帧 · A 画面分析 · C 纠错 · G 辅助线 · E 微调 · D 下载 · Esc 关闭</div>
+    <div class="vwKeys">← → 翻页 · 空格 切换保留/跳过 · Home / End 首尾 · 1 / 2 / 3 首 · 中 · 尾帧 · 4 播放镜头（K 暂停，, . 逐帧）· A 画面分析 · C 纠错 · G 辅助线 · E 微调 · D 下载 · Esc 关闭</div>
   </div>
 </div>
 
@@ -483,6 +501,7 @@
 <script src="/analysis.js"></script>
 <script src="/overview.js"></script>
 <script src="/corrections.js"></script>
+<script src="/clip.js"></script>
 <div id="collagePanel" class="appView" hidden role="region" aria-labelledby="collageTitle">
   <div class="viewHead">
     <button type="button" class="btn ghost small viewBack" id="collageClose">← 返回关键帧结果</button>
