@@ -396,9 +396,17 @@ const Analysis = {
     const i = Viewer.index;
     const span = this.shots[i];
     if (which && !span) return;
+    const tag = this.el('#vwFrameTag');
+    if (which === CLIP_VIEW) {
+      if (!Clip.show(i)) return;
+      this.viewing = which;
+      tag.hidden = true;
+      this.paintViewer(i);
+      return;
+    }
+    if (typeof Clip !== 'undefined') Clip.hide();
     this.viewing = which;
     const image = this.el('#vwImg');
-    const tag = this.el('#vwFrameTag');
     if (which) {
       const frame = span.strip[which - 1];
       image.onerror = () => {
@@ -422,6 +430,17 @@ const Analysis = {
     const name = document.createElement('h4');
     name.textContent = '镜头';
     box.appendChild(name);
+    // The shot itself, playing in place of the picture: the clearest way to see the camera move.
+    const clip = document.createElement('button');
+    clip.type = 'button';
+    clip.className = 'vwBtn shotPlay';
+    const playing = this.viewing === CLIP_VIEW;
+    clip.setAttribute('aria-pressed', String(playing));
+    clip.textContent = playing ? '↩ 回到截图（0）' : '▶ 播放这个镜头（4）';
+    clip.disabled = !this.video;
+    clip.title = this.video ? '在大图里循环播放这个镜头，可慢放、逐帧，对照着看运镜' : '原视频已清理，无法播放镜头片段';
+    clip.addEventListener('click', () => this.viewFrame(playing ? 0 : CLIP_VIEW));
+    box.appendChild(clip);
     const strip = document.createElement('div');
     strip.className = 'shotPick';
     SHOT_VIEWS.forEach((label, which) => {

@@ -621,3 +621,136 @@
 .fixStateText.bad {
   color: #fca5a5;
 }
+
+/* Shot clip: the shot plays in place of the picture, with its own controls underneath. */
+.shotPlay {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.shotPlay[aria-pressed='true'] {
+  border-color: #fcd34d;
+  color: #fde68a;
+}
+.vwFigure video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 6px;
+  background: #000;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+.vwFigure video[hidden],
+.vwFigure img[hidden] {
+  display: none;
+}
+.viewer.skipped .vwFigure video {
+  opacity: 0.35;
+  filter: grayscale(0.6);
+}
+.viewer.clipping .vwStage {
+  flex-direction: column;
+  row-gap: 12px;
+}
+.vwClipBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  width: min(100%, 980px);
+  flex: none;
+}
+.vwClipBar[hidden] {
+  display: none;
+}
+.vwClipPlay {
+  width: 42px;
+  padding-left: 0;
+  padding-right: 0;
+  font-size: 13px;
+}
+.vwClipStep {
+  width: 32px;
+  padding-left: 0;
+  padding-right: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+.vwClipTrack {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 160px;
+  height: 30px;
+  cursor: pointer;
+  touch-action: none;
+}
+.vwClipTrack::before,
+.vwClipFill {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 9px;
+  height: 4px;
+  border-radius: 2px;
+}
+.vwClipTrack::before {
+  right: 0;
+  background: rgba(255, 255, 255, 0.14);
+}
+.vwClipFill {
+  background: #fcd34d;
+}
+.vwClipMarks i {
+  position: absolute;
+  top: 5px;
+  width: 2px;
+  height: 12px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: #e5e7eb;
+}
+.vwClipMarks i::after {
+  content: attr(data-name);
+  position: absolute;
+  top: 13px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #9aa0ad;
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.vwClipTime {
+  min-width: 158px;
+  color: #c9ccd4;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.vwClipSpeeds {
+  display: inline-flex;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.vwClipSpeeds button {
+  padding: 6px 9px;
+  border: 0;
+  background: transparent;
+  color: #c9ccd4;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.vwClipSpeeds button + button {
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+.vwClipSpeeds button[aria-pressed='true'] {
+  background: rgba(251, 191, 36, 0.18);
+  color: #fde68a;
+}
+.vwClipSpeeds button:focus-visible,
+.vwClipTrack:focus-visible {
+  outline: 2px solid #fcd34d;
+  outline-offset: 1px;
+}
